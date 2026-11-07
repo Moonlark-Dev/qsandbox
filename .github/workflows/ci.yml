@@ -74,24 +74,19 @@ jobs:
         run: |
           npm ci
           npm run build
-      - name: Build sidecar (Nuitka)
+      - name: Build sidecar (Nuitka standalone)
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[build]"
           python tools/build_sidecar.py
       - name: Smoke test sidecar
-        run: |
-          mkdir -p /tmp/mqs-sidecar-home
-          MQS_HOME=/tmp/mqs-sidecar-home ./build-sidecar/mqs serve --profile ci --port 5750 --control-port 5751 --token ci-token > /tmp/mqs-sidecar.log 2>&1 &
-          pid=$!
-          for i in $(seq 1 60); do grep -q '"gui_url"' /tmp/mqs-sidecar.log && break; sleep 0.5; done
-          grep -q '"gui_url"' /tmp/mqs-sidecar.log
-          kill "$pid" || true
-          wait "$pid" || true
+        run: python tools/smoke_sidecar.py
+      - name: Package sidecar artifact
+        run: tar -C build-sidecar -czf "$PWD/mqs-sidecar-linux-x64.tar.gz" mqs.dist
       - uses: actions/upload-artifact@v4
         with:
           name: qsandbox-sidecar-linux
-          path: build-sidecar/mqs
+          path: mqs-sidecar-linux-x64.tar.gz
           if-no-files-found: error
 
   botpy-compat:

@@ -10,9 +10,10 @@
     "build": "tsc -p tsconfig.json",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron .",
-    "dist:linux": "npm run build && electron-builder --linux AppImage deb",
-    "dist:win": "npm run build && electron-builder --win nsis",
-    "dist:mac": "npm run build && electron-builder --mac dmg"
+    "check-sidecar": "node -e \"const fs=require('fs'),path=require('path');const dist=path.join(__dirname,'..','build-sidecar','mqs.dist');if(!fs.existsSync(dist)){console.error('缺少编译好的 sidecar: '+dist);console.error('先在仓库根目录运行: python tools/build_sidecar.py');process.exit(1)}\"",
+    "dist:linux": "npm run build && npm run check-sidecar && electron-builder --linux AppImage deb",
+    "dist:win": "npm run build && npm run check-sidecar && electron-builder --win nsis",
+    "dist:mac": "npm run build && npm run check-sidecar && electron-builder --mac dmg"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
@@ -32,11 +33,8 @@
     ],
     "extraResources": [
       {
-        "from": "../build-sidecar",
-        "to": "sidecar",
-        "filter": [
-          "**/*"
-        ]
+        "from": "../build-sidecar/mqs.dist",
+        "to": "sidecar"
       }
     ],
     "linux": {

@@ -18,6 +18,7 @@ desktop/node_modules/
 desktop/dist/
 desktop/release/
 build-sidecar/
+mqs-sidecar-*.tar.gz
 build/
 *.spec
 .env

@@ -1,0 +1,72 @@
+name: Desktop build
+
+# Reusable build used by both Desktop (push to main) and Release (v* tags).
+# Keeping one definition means the installer that gets published is produced by
+# exactly the same steps that CI verified.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux
+          - os: windows-latest
+            target: win
+          - os: macos-latest
+            target: mac
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Build web
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      - name: Install build deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[build]"
+      # The sidecar is what the installer actually launches, so compile it and
+      # start it on every platform before it is copied into the app.
+      - name: Build sidecar (Nuitka standalone)
+        run: python tools/build_sidecar.py
+      - name: Smoke test sidecar
+        run: python tools/smoke_sidecar.py
+      - name: Build desktop package
+        working-directory: desktop
+        env:
+          # No signing identities on CI runners; do not let electron-builder fail
+          # because it cannot find one.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          npm install
+          npm run dist:${{ matrix.target }}
+      # Fail the build if the compiled sidecar did not make it into the app.
+      - name: Verify the package bundles mqs
+        run: python tools/verify_desktop_bundle.py --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsandbox-${{ matrix.target }}
+          path: |
+            desktop/release/*.AppImage
+            desktop/release/*.deb
+            desktop/release/*.exe
+            desktop/release/*.dmg
+          if-no-files-found: error

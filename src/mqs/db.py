@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import AsyncIterator, Iterable, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,7 +13,27 @@ import aiosqlite
 
 from .config import SCHEMA_VERSION
 
-SCHEMA_PATH = Path(__file__).with_name("schema.sql")
+_PACKAGE_DIR = Path(__file__).resolve().parent
+
+
+def schema_path(name: str) -> Path:
+    """Locate a SQL schema file in the source tree and in the packaged sidecar.
+
+    Source tree (and PyInstaller/Nuitka onefile): the files sit next to this
+    module. Nuitka standalone puts data files under ``mqs_data/`` because a
+    directory literally named ``mqs`` would collide with the ``mqs`` executable
+    in the distribution root.
+    """
+    candidates = [
+        _PACKAGE_DIR / name,
+        _PACKAGE_DIR.parent / "mqs_data" / name,
+        Path(sys.executable).resolve().parent / "mqs_data" / name,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    looked = ", ".join(str(candidate) for candidate in candidates)
+    raise FileNotFoundError(f"schema file {name} is missing (looked in: {looked})")
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "clock_mode": "real",
@@ -85,18 +106,18 @@ class Database:
         if version == 0:
             # schema.sql is the L0+L1+L2 baseline (it already contains v2/v3
             # structures); only the newest delta has to be applied on top.
-            await self.conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+            await self.conn.executescript(schema_path("schema.sql").read_text(encoding="utf-8"))
             version = 3
         if version == 1:
-            migration = Path(__file__).with_name("schema_v2.sql")
+            migration = schema_path("schema_v2.sql")
             await self.conn.executescript(migration.read_text(encoding="utf-8"))
             version = 2
         if version == 2:
-            migration = Path(__file__).with_name("schema_v3.sql")
+            migration = schema_path("schema_v3.sql")
             await self.conn.executescript(migration.read_text(encoding="utf-8"))
             version = 3
         if version == 3:
-            migration = Path(__file__).with_name("schema_v4.sql")
+            migration = schema_path("schema_v4.sql")
             await self.conn.executescript(migration.read_text(encoding="utf-8"))
             version = 4
         await self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")

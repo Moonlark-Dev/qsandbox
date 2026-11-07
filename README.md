@@ -69,10 +69,13 @@ mqs status --json
 
 ```bash
 cd web && npm install && npm run build
-cd .. && pip install -e ".[build]" && python tools/build_sidecar.py   # Nuitka onefile
+cd .. && pip install -e ".[build]" && python tools/build_sidecar.py   # Nuitka standalone -> build-sidecar/mqs.dist
 cd desktop && npm install && npm run dist:linux   # release/QSandbox-*.AppImage
-# 或开发模式：npm start（自动拉起 build-sidecar/mqs）
+# 或开发模式：npm start（自动拉起 build-sidecar/mqs.dist/mqs）
 ```
+
+安装包自带编译好的 sidecar（`resources/sidecar/mqs`，Nuitka standalone），用户机器**不需要**装 Python。
+CI 会在三平台各跑一次 `tools/smoke_sidecar.py`，并解包检查 `tools/verify_desktop_bundle.py`，确认 mqs 真的进了安装包。
 
 桌面端数据放在 `app.getPath('userData')/mqs-home`，不污染仓库内的 profile。更多见 [desktop/README.md](./desktop/README.md)。
 

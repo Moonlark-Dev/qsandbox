@@ -69,8 +69,10 @@ mqs script run smoke               # 需要上面这个 echo bot 在线
   个人认证与企业认证限额一致，已合并为 `certified` 一档。
 - L2 频道家族已从 stub 升级为实现：默认 profile 带一个 “QSandbox 测试频道”，
   支持 guild/channel/member/role 查询、频道消息收发的 `MESSAGE_CREATE` / `AT_MESSAGE_CREATE`。
-- 桌面端：按用户决定由 Tauri 改为 **Electron**（`desktop/`），sidecar 用 Nuitka onefile；
-  AppImage 已在 Xvfb 下实测启动/退出。
+- 桌面端：按用户决定由 Tauri 改为 **Electron**（`desktop/`），sidecar 用 **Nuitka standalone**
+  （onedir，安装包里是 `resources/sidecar/mqs`）；AppImage 已在 Xvfb 下实测启动/退出。
+  早期用 onefile，它每次启动要把 ~200 MiB 解包到 `TMPDIR`，tmpfs 满时 sidecar 直接 exit 1，
+  桌面端只能报 “QSandbox 启动失败”，因此改回 standalone。
 
 ## 接口白名单（内邀接口）
 

@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
-import { ChildProcess, spawn } from 'node:child_process'
+import { ChildProcess, spawn, spawnSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -13,6 +13,8 @@ let window: BrowserWindow | null = null
 let currentProfile = process.env.MQS_DESKTOP_PROFILE || DEFAULT_PROFILE
 let shuttingDown = false
 let allowQuit = false
+let sidecarStderr = ''
+let sidecarCommand = ''
 
 interface Handshake {
   gui_url: string
@@ -88,7 +90,11 @@ function listProfiles(): Array<Record<string, unknown>> {
 function sidecarPath(): string | null {
   const name = process.platform === 'win32' ? 'mqs.exe' : 'mqs'
   const candidates = [
+    // Packaged: extraResources copies build-sidecar/mqs.dist here.
     path.join(process.resourcesPath, 'sidecar', name),
+    // Dev: Nuitka standalone build (what the installer ships).
+    path.join(__dirname, '..', '..', 'build-sidecar', 'mqs.dist', name),
+    // Dev: legacy Nuitka onefile build.
     path.join(__dirname, '..', '..', 'build-sidecar', name),
   ]
   for (const candidate of candidates) {
@@ -97,18 +103,18 @@ function sidecarPath(): string | null {
   return null
 }
 
-function serverInvocation(): { command: string; args: string[] } {
+function serverInvocation(): { command: string; args: string[]; sidecar: string | null } {
   const sidecar = sidecarPath()
-  if (sidecar) return { command: sidecar, args: [] }
+  if (sidecar) return { command: sidecar, args: [], sidecar }
   const python = process.env.MQS_PYTHON || 'python3'
-  return { command: python, args: ['-m', 'mqs'] }
+  return { command: python, args: ['-m', 'mqs'], sidecar: null }
 }
 
 function startServer(profile: string): Promise<Handshake> {
   const home = profilesHome()
   fs.mkdirSync(home, { recursive: true })
   const token = crypto.randomBytes(24).toString('base64url')
-  const { command, args } = serverInvocation()
+  const { command, args, sidecar } = serverInvocation()
   const fullArgs = [
     ...args,
     'serve',
@@ -130,7 +136,16 @@ function startServer(profile: string): Promise<Handshake> {
     PYTHONUNBUFFERED: '1',
   }
   shuttingDown = false
-  const child = spawn(command, fullArgs, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  sidecarStderr = ''
+  sidecarCommand = sidecar || `${command} ${args.join(' ')}`
+  // detached: give the server its own process group so quitting can stop a
+  // whole Nuitka onefile bootstrap (parent + child), not just the parent.
+  const child = spawn(command, fullArgs, {
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+    detached: process.platform !== 'win32',
+  })
   serverProcess = child
 
   return new Promise<Handshake>((resolve, reject) => {
@@ -166,15 +181,42 @@ function startServer(profile: string): Promise<Handshake> {
     child.stdout?.on('data', onData)
     child.stderr?.on('data', (chunk: Buffer) => {
       const text = chunk.toString('utf-8').trim()
-      if (text) console.error(`[mqs] ${text}`)
+      if (!text) return
+      console.error(`[mqs] ${text}`)
+      sidecarStderr = `${sidecarStderr}\n${text}`.trim().slice(-2000)
     })
-    child.on('error', (error) => settle(() => reject(error)))
+    child.on('error', (error) =>
+      settle(() => {
+        killTree(child)
+        reject(new Error(`无法启动 ${command}: ${error.message}`))
+      }),
+    )
     child.on('exit', (code) => {
       if (!shuttingDown) {
-        settle(() => reject(new Error(`QSandbox server exited with code ${code}`)))
+        settle(() => {
+          killTree(child)
+          reject(new Error(`QSandbox server exited with code ${code}`))
+        })
       }
     })
   })
+}
+
+function killTree(child: ChildProcess): void {
+  if (child.exitCode !== null || child.pid === undefined) return
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/F', '/T', '/PID', String(child.pid)], { windowsHide: true })
+    return
+  }
+  try {
+    process.kill(-child.pid, 'SIGTERM')
+  } catch {
+    try {
+      child.kill('SIGTERM')
+    } catch {
+      /* already gone */
+    }
+  }
 }
 
 function stopServer(): Promise<void> {
@@ -192,17 +234,18 @@ function stopServer(): Promise<void> {
       resolve()
     }
     child.once('exit', finish)
-    try {
-      child.kill('SIGTERM')
-    } catch {
-      finish()
-      return
-    }
+    killTree(child)
     timer = setTimeout(() => {
-      try {
-        child.kill('SIGKILL')
-      } catch {
-        /* already gone */
+      if (child.exitCode === null && child.pid !== undefined) {
+        try {
+          if (process.platform === 'win32') {
+            spawnSync('taskkill', ['/F', '/T', '/PID', String(child.pid)], { windowsHide: true })
+          } else {
+            process.kill(-child.pid, 'SIGKILL')
+          }
+        } catch {
+          /* already gone */
+        }
       }
       finish()
     }, 3000)
@@ -282,19 +325,31 @@ async function boot(): Promise<void> {
     const handshake = await startServer(currentProfile)
     createWindow(handshake)
   } catch (error) {
-    dialog.showErrorBox(
-      'QSandbox 启动失败',
-      [
-        String(error),
-        '',
-        '开发模式请确认已在仓库根目录创建 .venv 并安装 qsandbox（mqs）；',
-        '或设置 MQS_PYTHON 指向带 mqs 的 Python。',
-        '发行版应包含 resources/sidecar/mqs。',
-        `profile: ${currentProfile}`,
-      ].join('\n'),
-    )
+    dialog.showErrorBox('QSandbox 启动失败', startupFailureMessage(error))
     app.quit()
   }
+}
+
+function startupFailureMessage(error: unknown): string {
+  const lines = [String(error)]
+  const sidecar = sidecarPath()
+  if (sidecar) {
+    lines.push('', `sidecar: ${sidecar}`)
+    if (sidecarStderr) lines.push('', 'sidecar 输出（最后 2 KB）:', sidecarStderr)
+  } else {
+    lines.push(
+      '',
+      '安装包里没有内置 sidecar（resources/sidecar/mqs）：',
+      app.isPackaged
+        ? '  发行包在打包前必须先运行 python tools/build_sidecar.py，'
+        : '  开发模式先运行 python tools/build_sidecar.py，',
+      '  并确认 electron-builder 的 extraResources 指向 build-sidecar/mqs.dist。',
+      '开发模式下也可以设置 MQS_PYTHON 指向已安装 qsandbox（mqs）的 Python。',
+    )
+  }
+  lines.push('', `profile: ${currentProfile}`)
+  if (sidecarCommand && sidecarCommand !== sidecar) lines.push(`command: ${sidecarCommand}`)
+  return lines.join('\n')
 }
 
 app.whenReady().then(async () => {

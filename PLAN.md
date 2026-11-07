@@ -354,11 +354,15 @@ v0.1 已落地并通过验收：
 
 ### 12.3 桌面端（Electron）
 
-- `desktop/src/main.ts` 启动 MQS sidecar（`build-sidecar/mqs`，onefile），读 stdout
-  JSON 握手，再用同一份 Vue 前端加载 GUI；退出时回收 sidecar（含 3.5s 兜底与 `os._exit` 清理）。
-- 已构建并实测 `QSandbox-0.1.0-x86_64.AppImage`（142 MB），Xvfb 下启动、加载、截图、退出正常。
-- Windows/macOS 由 `.github/workflows/desktop.yml` matrix 构建。
-- sidecar 打包器 v0.2 用 PyInstaller，**v0.3 起改回 Nuitka**（`tools/build_sidecar.py`）。
+- `desktop/src/main.ts` 启动 MQS sidecar（发行包 `resources/sidecar/mqs`，开发模式
+  `build-sidecar/mqs.dist/mqs`，**Nuitka standalone**），读 stdout JSON 握手，再用同一份 Vue
+  前端加载 GUI；退出时回收整个 sidecar 进程组（含 3.5s 兜底与 `os._exit` 清理）。
+- 已构建并实测 `QSandbox-0.1.0-x86_64.AppImage`（173 MB，standalone sidecar 184 MB 未压缩），
+  Xvfb 下启动、加载 GUI、截图、退出正常；`resources/sidecar/mqs` 直接起服，无临时解包。
+- Windows/macOS 由 `.github/workflows/desktop-build.yml` matrix 构建（`desktop.yml` 与
+  `release.yml` 共用同一份定义）。
+- sidecar 打包器 v0.2 用 PyInstaller，v0.3 起用 Nuitka；2026-11-08 起由 onefile 改为
+  **standalone**（`tools/build_sidecar.py`，保留 `--onefile` 选项）。
 
 ### 12.4 GUI 修正
 
@@ -476,3 +480,24 @@ v0.1 已落地并通过验收：
   `qsandbox-sidecar-linux` artifact。
 - `desktop.yml` 改为只在 **push 到 main** 和三平台打包（产物作为 Actions artifact）。
 - 新增 `release.yml`：push `v*` tag 时三平台打包，`publish` job 汇总后上传到 GitHub Release。
+
+### 13.9 sidecar 改为 standalone + 安装包校验（2026-11-08）
+
+起因：桌面端启动报 `QSandbox server exited with code 1`。复现后确认不是“安装包缺 mqs”，
+而是 onefile 每次启动都要把 ~200 MiB 解包到 `TMPDIR`；本机 `/tmp` 只有 2 GiB，被残留的
+onefile 解包目录 + 没回收的 sidecar 进程塞满后，解包失败（`couldn't unpack file to target
+path.: No space left on device`）并 exit 1，桌面端只能原样转述退出码。
+
+- `tools/build_sidecar.py` 默认改为 **Nuitka standalone** → `build-sidecar/mqs.dist/`
+  （启动不解包、不占临时空间）；`--onefile` 保留给需要单文件的场景。
+- `desktop/package.json` 的 `extraResources` 指向 `../build-sidecar/mqs.dist`；
+  `main.ts` 按 `resources/sidecar/mqs`（发行）→ `build-sidecar/mqs.dist/mqs`（开发）→
+  `build-sidecar/mqs`（旧 onefile）查找，失败时对话框直接说明是“缺 sidecar”还是
+  “sidecar 崩了”，并附 stderr 尾部。
+- 新增 `tools/smoke_sidecar.py`：跨平台启动 sidecar，校验握手 + `/_mqs/health` + GUI 不是
+  “前端尚未构建”兜底页（旧 CI 用 bash 写法，Windows 上根本没执行过这个冒烟）。
+- 新增 `tools/verify_desktop_bundle.py`：打包后检查 `resources/sidecar/mqs` 与内嵌
+  `web/dist` 是否存在，并实际启动安装包里的那个二进制。
+- 新增可复用工作流 `desktop-build.yml`（web → sidecar → 冒烟 → 打包 → 校验），
+  `desktop.yml` 与 `release.yml` 共用；`ci.yml` 的 sidecar artifact 改为打好的
+  `mqs.dist` tar 包。
