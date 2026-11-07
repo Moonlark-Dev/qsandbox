@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "QSandbox desktop shell (Electron) — starts the local sandbox server and renders the Vue GUI",
+  "homepage": "https://github.com/Moonlark-Dev/qsandbox",
   "main": "dist/main.js",
   "type": "commonjs",
   "scripts": {
@@ -44,7 +45,8 @@
         "deb"
       ],
       "category": "Development",
-      "artifactName": "QSandbox-${version}-${arch}.${ext}"
+      "artifactName": "QSandbox-${version}-${arch}.${ext}",
+      "maintainer": "Moonlark Dev Team"
     },
     "win": {
       "target": [
