@@ -159,3 +159,19 @@ async def test_channel_daily_and_channel_count_limits(mqs) -> None:
         )
         assert second.status_code == 429
         assert second.json()["code"] == 40055
+
+
+async def test_group_add_robot_event(mqs) -> None:
+    group_id = await mqs.group_id()
+    await mqs.world.create_bot(app_id="10001", name="Join Bot", scopes=["group_message"])
+    ws, ready, token = await mqs.connect_gateway("10001", intents=1 << 25)
+    try:
+        await mqs.world.add_bot_to_group(group_id, "10001")
+        frame = json.loads(await asyncio.wait_for(ws.recv(), 5))
+        assert frame["t"] == "GROUP_ADD_ROBOT", frame
+        payload = frame["d"]
+        assert payload["group_openid"] == await mqs.world.openid("10001", "group", group_id)
+        assert payload["op_member_openid"]
+        assert payload["timestamp"]
+    finally:
+        await ws.close()

@@ -40,6 +40,7 @@ const groupBots = computed(() => {
   return state.bots.filter((bot) => activeGroup.value.bot_ids.includes(bot.id))
 })
 const currentUser = computed(() => state.users.find((u) => u.id === currentUserId.value))
+const dmBot = computed(() => (dmTarget.value ? state.bots.find((b) => b.id === dmTarget.value) : null))
 const visibleConversations = computed(() =>
   state.conversations.filter((c) => !(c.type === 'dm' && c.user_id === currentUserId.value)),
 )
@@ -279,6 +280,38 @@ function display(content: string): string {
   return (content || '').replace(/<@![^>]+>/g, '@').trim()
 }
 
+function renderText(message: any): string {
+  if (!message) return ''
+  if (message.content && message.content.trim()) return display(message.content)
+  const raw = message.raw || message
+  if (raw.markdown?.content) return raw.markdown.content
+  if (raw.ark?.kv?.length) {
+    return raw.ark.kv
+      .map((item: any) => item.value || item.key || '')
+      .filter(Boolean)
+      .join('  ')
+  }
+  if (raw.embed) {
+    return [raw.embed.title, raw.embed.prompt, raw.embed.description].filter(Boolean).join(' · ')
+  }
+  if (raw.media || message.attachments?.length) return '[媒体消息]'
+  if (raw.keyboard?.content?.rows?.length) return '[消息按钮]'
+  return '[空消息]'
+}
+
+function preview(message: any): string {
+  const text = renderText(message)
+  return text === '[空消息]' ? '还没有消息' : text
+}
+
+function keyboardButtons(message: any): any[] {
+  const rows = message?.raw?.keyboard?.content?.rows || message?.keyboard?.content?.rows || []
+  return rows.flatMap((row: any) => row.buttons || []).map((button: any) => ({
+    label: button.render_data?.label || button.action?.data || '按钮',
+    data: button.action?.data || '',
+  }))
+}
+
 function msgTag(message: any): string {
   const map: Record<number, string> = { 2: 'markdown', 3: 'ark', 4: 'embed', 7: 'media' }
   return map[message.msg_type] || ''
@@ -311,7 +344,7 @@ function isImage(att: any): boolean {
         <img class="avatar" :src="conv.avatar" alt="" />
         <div class="grow">
           <div class="conv-name">{{ conv.name }}</div>
-          <div class="conv-preview">{{ conv.last_message ? display(conv.last_message.content) || '[非文本消息]' : '还没有消息' }}</div>
+          <div class="conv-preview">{{ conv.last_message ? preview(conv.last_message) : '还没有消息' }}</div>
         </div>
         <span v-if="conv.type === 'group'" class="tag">{{ conv.member_count }}</span>
       </div>
@@ -363,7 +396,12 @@ function isImage(att: any): boolean {
               <span v-if="message.recalled_at" class="tag err">已撤回</span>
             </div>
             <div class="msg-bubble" :style="message.recalled_at ? 'opacity: .55; text-decoration: line-through' : ''">
-              {{ display(message.content) || '[空消息]' }}
+              {{ renderText(message) }}
+              <div v-if="keyboardButtons(message).length" class="keyboard-row">
+                <span v-for="(button, index) in keyboardButtons(message)" :key="index" class="keyboard-btn" :title="button.data">
+                  {{ button.label }}
+                </span>
+              </div>
               <div v-for="att in attachments(message)" :key="att.id || att.url" style="margin-top: 6px">
                 <img v-if="isImage(att) && att.url" :src="att.url" style="max-width: 240px; border-radius: 8px" alt="" />
                 <a v-else-if="att.url" :href="att.url" target="_blank" class="small mono">{{ att.filename || att.url }}</a>
@@ -388,18 +426,23 @@ function isImage(att: any): boolean {
         <div class="row wrap" style="margin-bottom: 8px">
           <span class="small faint">发送身份</span>
           <span class="tag info">{{ currentUser?.nickname || '未选择' }}</span>
-          <span class="small faint" style="margin-left: 8px">@</span>
-          <button
-            v-for="bot in groupBots"
-            :key="bot.id"
-            class="btn small"
-            :class="selectedBots.includes(bot.id) ? 'primary' : 'ghost'"
-            @click="toggleBot(bot.id)"
-          >
-            {{ bot.name }}
-          </button>
-          <span v-if="!groupBots.length" class="small faint">（此会话没有 Bot）</span>
-          <span v-if="groupBots.length && !selectedBots.length" class="small faint">默认按设置自动 @</span>
+          <template v-if="dmTarget">
+            <span class="small faint" style="margin-left: 8px">→ {{ dmBot?.name || dmTarget }}</span>
+          </template>
+          <template v-else>
+            <span class="small faint" style="margin-left: 8px">@</span>
+            <button
+              v-for="bot in groupBots"
+              :key="bot.id"
+              class="btn small"
+              :class="selectedBots.includes(bot.id) ? 'primary' : 'ghost'"
+              @click="toggleBot(bot.id)"
+            >
+              {{ bot.name }}
+            </button>
+            <span v-if="!groupBots.length" class="small faint">（此会话没有 Bot）</span>
+            <span v-if="groupBots.length && !selectedBots.length" class="small faint">默认按设置自动 @</span>
+          </template>
         </div>
         <div class="composer-row">
           <textarea

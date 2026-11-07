@@ -201,6 +201,67 @@ define(
     tag="guild",
 )
 define(
+    "group.upload_prepare",
+    method="POST",
+    path="/v2/groups/{group_openid}/upload_prepare",
+    summary="群聊富媒体分片上传：预上传",
+    auth="bot",
+    scopes=("group_message", "media"),
+    rate_class="media",
+    errors=(10001, 40040),
+    coverage="full",
+    layer="L1",
+    tag="media",
+)
+define(
+    "c2c.upload_prepare",
+    method="POST",
+    path="/v2/users/{openid}/upload_prepare",
+    summary="单聊富媒体分片上传：预上传",
+    auth="bot",
+    scopes=("c2c_message", "media"),
+    rate_class="media",
+    errors=(10001, 40040),
+    coverage="full",
+    layer="L1",
+    tag="media",
+)
+define(
+    "upload.put_part",
+    method="PUT",
+    path="/v2/uploads/{upload_id}/parts/{index}",
+    summary="富媒体分片上传：上传分片（预签名 URL）",
+    auth="none",
+    coverage="full",
+    layer="L1",
+    tag="media",
+    notes="MQS 用一次性 upload_id 鉴权，官方为对象存储预签名 URL",
+)
+define(
+    "group.upload_part_finish",
+    method="POST",
+    path="/v2/groups/{group_openid}/upload_part_finish",
+    summary="群聊富媒体分片上传：完成分片",
+    auth="bot",
+    scopes=("group_message", "media"),
+    rate_class="media",
+    coverage="full",
+    layer="L1",
+    tag="media",
+)
+define(
+    "c2c.upload_part_finish",
+    method="POST",
+    path="/v2/users/{openid}/upload_part_finish",
+    summary="单聊富媒体分片上传：完成分片",
+    auth="bot",
+    scopes=("c2c_message", "media"),
+    rate_class="media",
+    coverage="full",
+    layer="L1",
+    tag="media",
+)
+define(
     "group.send_message",
     method="POST",
     path="/v2/groups/{group_openid}/messages",

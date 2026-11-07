@@ -75,31 +75,32 @@ def media_hash(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def avatar_svg(seed: str) -> str:
-    """Local, deterministic, DiceBear-ish avatar (no Tencent assets, no network)."""
+def avatar_svg(seed: str, label: str | None = None, kind: str = "user") -> str:
+    """Deterministic local avatar: background color encodes the entity kind."""
     h = int(hashlib.sha256(seed.encode()).hexdigest()[:8], 16)
-    hue = h % 360
-    hue2 = (hue + 48) % 360
-    fg = f"hsl({(hue + 180) % 360},70%,45%)"
-    bg1 = f"hsl({hue},65%,72%)"
-    bg2 = f"hsl({hue2},70%,58%)"
-    shapes = []
-    for i in range(4):
-        cx = 16 + ((h >> (i * 5)) % 64)
-        cy = 16 + ((h >> (i * 7)) % 64)
-        r = 6 + ((h >> (i * 3)) % 14)
-        shapes.append(
-            f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{fg}" opacity="0.55"/>'
-        )
-    initial = seed[:1].upper()
+    palettes = {
+        "bot": (262, 12),     # violet → pink
+        "user": (194, 18),    # blue → cyan
+        "npc": (150, 14),     # green
+        "group": (28, 16),    # amber
+        "guild": (28, 16),
+    }
+    base, spread = palettes.get(kind, palettes["user"])
+    hue = (base + (h % spread) - spread // 2) % 360
+    hue2 = (hue + 28) % 360
+    bg1 = f"hsl({hue},72%,62%)"
+    bg2 = f"hsl({hue2},68%,46%)"
+    text = (label or seed).strip()
+    initial = text[0].upper() if text else "?"
+    if not initial.isalnum():
+        initial = text[:2] if text else "?"
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">'
         f'<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">'
         f'<stop offset="0" stop-color="{bg1}"/><stop offset="1" stop-color="{bg2}"/></linearGradient></defs>'
         f'<rect width="96" height="96" rx="24" fill="url(#g)"/>'
-        + "".join(shapes)
-        + f'<text x="48" y="60" font-size="40" font-family="sans-serif" font-weight="700" '
-        f'text-anchor="middle" fill="#fff">{initial}</text></svg>'
+        f'<text x="48" y="62" font-size="42" font-family="PingFang SC, Microsoft YaHei, sans-serif" ' 
+        f'font-weight="700" text-anchor="middle" fill="#fff">{initial}</text></svg>'
     )
 
 

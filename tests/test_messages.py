@@ -246,3 +246,30 @@ async def test_c2c_passive_window_60min_and_4_replies(mqs) -> None:
             assert late.json()["code"] == 40057
     finally:
         await ws.close()
+
+
+async def test_markdown_message_is_kept(mqs) -> None:
+    ws, ready, token = await mqs.connect_gateway()
+    headers = {"Authorization": f"QQBot {token}"}
+    try:
+        await _send_user(mqs, "markdown please")
+        message = await mqs.last_inbound(f"group:{await mqs.group_id()}")
+        event = (await mqs.world.list_events())[-1]
+        group_openid = event["payload"]["group_openid"]
+        async with httpx.AsyncClient(base_url=mqs.sim_base) as client:
+            response = await client.post(
+                f"/v2/groups/{group_openid}/messages",
+                headers=headers,
+                json={
+                    "msg_type": 2,
+                    "markdown": {"content": "**today**: 20"},
+                    "keyboard": {"content": {"rows": [{"buttons": [{"render_data": {"label": "重抽"}, "action": {"data": "!jrrp r"}}]}]}},
+                    "msg_id": message["msg_id"],
+                },
+            )
+            assert response.status_code == 200, response.text
+        out = [m for m in await mqs.world.list_messages(f"group:{await mqs.group_id()}") if m["direction"] == "out"]
+        assert out[-1]["markdown"]["content"] == "**today**: 20"
+        assert out[-1]["keyboard"]["content"]["rows"][0]["buttons"][0]["render_data"]["label"] == "重抽"
+    finally:
+        await ws.close()

@@ -64,6 +64,7 @@ class World:
         self._rule_tasks: set[asyncio.Task] = set()
         self._frame_writes = 0
         self._lock = asyncio.Lock()
+        self.upload_sessions: dict[str, dict[str, Any]] = {}
 
     # ------------------------------------------------------------------ lifecycle
     async def start(self) -> None:
@@ -153,17 +154,20 @@ class World:
 
     # ------------------------------------------------------------------ serializers
     @staticmethod
-    def _avatar(entity_id: str) -> str:
-        return f"/avatars/{entity_id}.svg"
+    def _avatar(entity_id: str, label: str = "", kind: str = "user") -> str:
+        from urllib.parse import quote
+
+        return f"/avatars/{entity_id}.svg?label={quote(label or '')}&kind={quote(kind)}"
 
     def user_out(self, row: aiosqlite.Row | dict) -> dict[str, Any]:
         data = dict(row)
-        data["avatar"] = data.get("avatar") or self._avatar(data["id"])
+        kind = "npc" if data.get("actor_type") == "npc" else "user"
+        data["avatar"] = self._avatar(data["id"], data.get("nickname") or data["id"], kind)
         return data
 
     def bot_out(self, row: aiosqlite.Row | dict) -> dict[str, Any]:
         data = dict(row)
-        data["avatar"] = data.get("avatar") or self._avatar(f"bot_{data['id']}")
+        data["avatar"] = self._avatar(f"bot_{data['id']}", data.get("name") or data["id"], "bot")
         try:
             data["scopes"] = json.loads(data.get("scopes") or "[]")
         except ValueError:
@@ -180,7 +184,7 @@ class World:
             "SELECT b.id, b.name FROM group_bots gb JOIN bots b ON b.id=gb.bot_id WHERE gb.group_id=?", (gid,)
         )
         owners = await self.db.fetchone("SELECT user_id FROM group_members WHERE group_id=? AND role='owner'", (gid,))
-        data["avatar"] = data.get("avatar") or self._avatar(gid)
+        data["avatar"] = self._avatar(gid, data.get("name") or gid, "group")
         data["member_count"] = int(count["c"]) if count else 0
         data["bot_ids"] = [b["id"] for b in bots]
         data["bots"] = [{"id": b["id"], "name": b["name"]} for b in bots]
@@ -213,7 +217,8 @@ class World:
             await conn.execute(
                 "INSERT INTO users(id,nickname,avatar,gender,age,city,actor_type,seed,behavior,created_at)"
                 " VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (uid, nickname, avatar or self._avatar(uid), gender, age, city or self.fake.city(),
+                (uid, nickname, avatar or self._avatar(uid, nickname, "npc" if actor_type == "npc" else "user"),
+                 gender, age, city or self.fake.city(),
                  actor_type, seed, behavior, now),
             )
             out = await self._fetchone_conn(conn, "SELECT * FROM users WHERE id=?", (uid,))
@@ -348,7 +353,7 @@ class World:
             await conn.execute(
                 "INSERT INTO bots(id,app_id,secret,name,avatar,scopes,delivery,whitelisted,created_at)"
                 " VALUES(?,?,?,?,?,?,?,?,?)",
-                (bot_id, app_id, secret, name, avatar or self._avatar(f"bot_{bot_id}"),
+                (bot_id, app_id, secret, name, avatar or self._avatar(f"bot_{bot_id}", name, "bot"),
                  json.dumps(scopes), delivery, 1 if whitelisted else 0, self.clock.now_ms()),
             )
             out = await self._fetchone_conn(conn, "SELECT * FROM bots WHERE id=?", (bot_id,))
@@ -456,7 +461,8 @@ class World:
             now = self.clock.now_ms()
             await conn.execute(
                 "INSERT INTO groups(id,name,owner_id,join_policy,avatar,created_at) VALUES(?,?,?,?,?,?)",
-                (gid, name or self.fake.group_name(), owner_id, join_policy, self._avatar(gid), now),
+                (gid, name or self.fake.group_name(), owner_id, join_policy,
+                 self._avatar(gid, name or "", "group"), now),
             )
             await conn.execute(
                 "INSERT INTO conversations(id,type,peer_id,bot_id,last_seq) VALUES(?,?,?,?,0)",
@@ -483,7 +489,11 @@ class World:
                 botrow = await self._fetchone_conn(conn, "SELECT * FROM bots WHERE id=?", (bid,))
                 if botrow:
                     await self._openid_tx(conn, botrow, "group", gid)
-        return await self.group_out(out)
+        result = await self.group_out(out)
+        for bid in dict.fromkeys(bot_ids or []):
+            if await self.db.fetchone("SELECT 1 FROM group_bots WHERE group_id=? AND bot_id=?", (gid, bid)):
+                await self.emit_group_robot_event(bid, gid, "GROUP_ADD_ROBOT", owner_id)
+        return result
 
     async def list_groups(self) -> list[dict[str, Any]]:
         rows = await self.db.fetchall("SELECT * FROM groups ORDER BY id")
@@ -516,7 +526,10 @@ class World:
         out = []
         for r in rows:
             data = dict(r)
-            data["avatar"] = data.get("avatar") or self._avatar(data["user_id"])
+            data["avatar"] = self._avatar(
+                data["user_id"], data.get("nickname") or data["user_id"],
+                "npc" if data.get("actor_type") == "npc" else "user",
+            )
             out.append(data)
         return out
 
@@ -562,9 +575,13 @@ class World:
             (group_id, bot_id, self.clock.now_ms()),
         )
         await self.openid(bot_id, "group", group_id)
-        return await self.get_group(group_id)
+        group = await self.get_group(group_id)
+        await self.emit_group_robot_event(bot_id, group_id, "GROUP_ADD_ROBOT", group.get("owner_id"))
+        return await self.group_out(await self.db.fetchone("SELECT * FROM groups WHERE id=?", (group_id,)))
 
     async def remove_bot_from_group(self, group_id: str, bot_id: str) -> None:
+        group = await self.db.fetchone("SELECT * FROM groups WHERE id=?", (group_id,))
+        await self.emit_group_robot_event(bot_id, group_id, "GROUP_DEL_ROBOT", group["owner_id"] if group else None)
         await self.db.execute("DELETE FROM group_bots WHERE group_id=? AND bot_id=?", (group_id, bot_id))
 
     async def group_members_page(
@@ -647,6 +664,34 @@ class World:
             }
         raise InvalidParam("member openid not found")
 
+    async def emit_group_robot_event(
+        self, bot_id: str, group_id: str, event_type: str, operator_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """GROUP_ADD_ROBOT / GROUP_DEL_ROBOT delivery for a single bot."""
+        bot = await self.db.fetchone("SELECT * FROM bots WHERE id=?", (bot_id,))
+        group = await self.db.fetchone("SELECT * FROM groups WHERE id=?", (group_id,))
+        if bot is None or group is None:
+            return None
+        op_id = operator_id or group["owner_id"] or ""
+        group_openid = await self.openid(bot_id, "group", group_id)
+        op_openid = await self.openid(bot_id, "user", op_id) if op_id else ""
+        payload = {
+            "timestamp": self.clock.iso(),
+            "group_openid": group_openid,
+            "op_member_openid": op_openid,
+        }
+        event_id = new_event_id()
+        conversation_id = f"group:{group_id}"
+        await self.ensure_conversation(conversation_id)
+        cur = await self.db.execute(
+            "INSERT INTO events(event_id,type,payload_json,conversation_id,target_bot_id,created_at)"
+            " VALUES(?,?,?,?,?,?)",
+            (event_id, event_type, json.dumps(payload, ensure_ascii=False), conversation_id, bot_id,
+             self.clock.now_ms()),
+        )
+        await self._deliver(bot_id, int(cur), event_type, event_id, payload, self.bot_out(bot), conversation_id)
+        return {"event_id": event_id, "seq": int(cur), "payload": payload}
+
     # ------------------------------------------------------------------ guilds (L2)
     async def create_guild(
         self,
@@ -685,7 +730,8 @@ class World:
             gid = f"guild_{int(row['c']) + 1:06d}"
             await conn.execute(
                 "INSERT INTO guilds(id,name,owner_id,icon,created_at) VALUES(?,?,?,?,?)",
-                (gid, name or self.fake.group_name(), owner_id, self._avatar(gid), now),
+                (gid, name or self.fake.group_name(), owner_id,
+                 self._avatar(gid, name or "", "guild"), now),
             )
             for position, (channel_name, channel_type) in enumerate((("大厅", 0), ("闲聊", 0), ("语音房", 2))):
                 cid = f"channel_{gid[-6:]}{position + 1:02d}"
@@ -734,7 +780,7 @@ class World:
         data["channel_count"] = len(channels)
         data["member_count"] = int(members["c"]) if members else 0
         data["bot_ids"] = [b["user_id"] for b in bots]
-        data["icon"] = data.get("icon") or self._avatar(gid)
+        data["icon"] = self._avatar(gid, data.get("name") or gid, "guild")
         return data
 
     async def list_guilds(self, *, bot_id: str | None = None) -> list[dict[str, Any]]:
@@ -1001,7 +1047,7 @@ class World:
                     "type": "group",
                     "peer_id": g["id"],
                     "name": g["name"],
-                    "avatar": g["avatar"] or self._avatar(g["id"]),
+                    "avatar": self._avatar(g["id"], g["name"], "group"),
                     "member_count": int(members["c"]) if members else 0,
                     "member_ids": [m["user_id"] for m in member_rows],
                     "bot_ids": [b["id"] for b in bots],
@@ -1020,7 +1066,7 @@ class World:
                     "type": "dm",
                     "peer_id": d["peer_id"],
                     "name": f"{user['nickname']} ↔ {bot['name']}",
-                    "avatar": user["avatar"] or self._avatar(user["id"]),
+                    "avatar": self._avatar(user["id"], user["nickname"], "user"),
                     "bot_id": d["bot_id"],
                     "user_id": user["id"],
                     "last_message": await self._last_message(d["id"]),
@@ -1121,16 +1167,40 @@ class World:
             if data["sender_type"] == "user":
                 r = await self.db.fetchone("SELECT id,nickname,avatar FROM users WHERE id=?", (data["sender_id"],))
                 if r:
-                    sender = {"id": r["id"], "name": r["nickname"], "avatar": r["avatar"] or self._avatar(r["id"])}
+                    sender = {
+                        "id": r["id"], "name": r["nickname"],
+                        "avatar": self._avatar(r["id"], r["nickname"], "user"),
+                    }
             else:
                 r = await self.db.fetchone("SELECT id,name,avatar FROM bots WHERE id=?", (data["sender_id"],))
                 if r:
-                    sender = {"id": r["id"], "name": r["name"], "avatar": r["avatar"] or self._avatar(f"bot_{r['id']}")}
+                    sender = {
+                        "id": r["id"], "name": r["name"],
+                        "avatar": self._avatar(f"bot_{r['id']}", r["name"], "bot"),
+                    }
         except (KeyError, TypeError):
             sender = None
         data["sender"] = sender
         data["raw"] = raw
         data["content"] = data.get("content") or ""
+        for key in ("markdown", "keyboard", "ark", "embed", "media", "message_reference", "mentions"):
+            if key in raw:
+                data[key] = raw[key]
+        if "media" in raw and "attachments" not in data:
+            file_info = (raw.get("media") or {}).get("file_info") if isinstance(raw.get("media"), dict) else None
+            if file_info:
+                mhash = str(file_info).removeprefix("mqs-file-")
+                media_row = await self.db.fetchone("SELECT * FROM media WHERE hash=?", (mhash,))
+                if media_row:
+                    data["attachments"] = [
+                        {
+                            "content_type": media_row["mime"],
+                            "filename": mhash[:12],
+                            "size": media_row["size"],
+                            "url": f"/media/{mhash}",
+                            "id": mhash,
+                        }
+                    ]
         return data
 
     async def send_as_user(
@@ -1584,6 +1654,96 @@ class World:
     async def media_by_hash(self, mhash: str) -> dict[str, Any] | None:
         row = await self.db.fetchone("SELECT * FROM media WHERE hash=?", (mhash,))
         return dict(row) if row else None
+
+    async def prepare_upload(
+        self, bot_id: str, kind: str, target_openid: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        mapping = await self.resolve_openid(bot_id, target_openid)
+        if mapping["kind"] != ("group" if kind == "group" else "user"):
+            raise InvalidParam("openid kind mismatch")
+        file_type = int(body.get("file_type") or 1)
+        if file_type == 4:
+            raise InvalidParam("file_type 4 (generic file) is not supported")
+        if file_type not in (1, 2, 3):
+            raise InvalidParam(f"invalid file_type: {file_type}")
+        size = int(body.get("file_size") or 0)
+        limit = {1: 10 * 1024 * 1024, 2: 30 * 1024 * 1024, 3: 5 * 1024 * 1024}[file_type]
+        if size <= 0 or size > limit:
+            raise InvalidParam(f"invalid file_size: {size}")
+        block_size = 4 * 1024 * 1024
+        count = max(1, (size + block_size - 1) // block_size)
+        upload_id = f"MQS_UP_{new_session_id()[:20]}"
+        import mimetypes
+
+        mime = mimetypes.guess_type(str(body.get("file_name") or ""))[0] or "application/octet-stream"
+        if file_type == 1 and not mime.startswith("image/"):
+            mime = "image/png"
+        self.upload_sessions[upload_id] = {
+            "bot_id": bot_id,
+            "kind": kind,
+            "target_openid": target_openid,
+            "file_type": file_type,
+            "file_name": str(body.get("file_name") or ""),
+            "size": size,
+            "md5": body.get("md5"),
+            "mime": mime,
+            "block_size": block_size,
+            "parts": {},
+            "srv_send_msg": bool(body.get("srv_send_msg", True)),
+        }
+        return {"upload_id": upload_id, "block_size": block_size, "count": count}
+
+    def put_upload_part(self, upload_id: str, index: int, data: bytes) -> None:
+        session = self.upload_sessions.get(upload_id)
+        if session is None:
+            raise InvalidParam("unknown upload_id")
+        if index < 0 or index >= max(1, (session["size"] + session["block_size"] - 1) // session["block_size"]):
+            raise InvalidParam("invalid part index")
+        session["parts"][index] = data
+
+    def finish_upload_part(self, upload_id: str, index: int, block_size: int, md5: str) -> None:
+        session = self.upload_sessions.get(upload_id)
+        if session is None:
+            raise InvalidParam("unknown upload_id")
+        data = session["parts"].get(index)
+        if data is None:
+            raise InvalidParam("part has not been uploaded")
+        import hashlib
+
+        actual = hashlib.md5(data).hexdigest()
+        if md5 and actual != md5:
+            raise InvalidParam("part md5 mismatch")
+        if block_size and block_size != len(data):
+            raise InvalidParam("part block_size mismatch")
+        session.setdefault("finished", set()).add(index)
+
+    async def finalize_upload(
+        self, bot_id: str, kind: str, target_openid: str, upload_id: str, srv_send_msg: bool | None = None
+    ) -> dict[str, Any]:
+        session = self.upload_sessions.get(upload_id)
+        if session is None:
+            raise InvalidParam("unknown upload_id")
+        if session["bot_id"] != bot_id or session["target_openid"] != target_openid:
+            raise InvalidParam("upload_id does not belong to this target")
+        expected = max(1, (session["size"] + session["block_size"] - 1) // session["block_size"])
+        if set(session.get("finished", set())) != set(range(expected)):
+            raise InvalidParam("upload is incomplete")
+        data = b"".join(session["parts"][i] for i in range(expected))
+        if len(data) != session["size"]:
+            raise InvalidParam("assembled size mismatch")
+        media = await self.store_media(data, session["mime"])
+        self.upload_sessions.pop(upload_id, None)
+        result = {"file_uuid": media["hash"], "file_info": f"mqs-file-{media['hash']}", "ttl": 0}
+        if srv_send_msg if srv_send_msg is not None else session["srv_send_msg"]:
+            sent = await self.send_as_bot(
+                bot_id,
+                target_kind="group" if kind == "group" else "user",
+                target_openid=target_openid,
+                body={"msg_type": 7, "content": "", "media": {"file_info": result["file_info"]}},
+            )
+            sent.pop("_rate", None)
+            result["message"] = sent
+        return result
 
     # ------------------------------------------------------------------ debug
     async def log_frame(

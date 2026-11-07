@@ -113,15 +113,17 @@ def create_control_app(world: World, config: ProcessConfig) -> FastAPI:
     app.add_api_websocket_route("/_mqs/ws", control_websocket)
 
     @app.get("/avatars/{key}.svg", include_in_schema=False)
-    async def avatar(key: str) -> Response:
+    async def avatar(key: str, label: str = "", kind: str = "user") -> Response:
         import re
 
         from ..ids import avatar_svg
 
         if not re.fullmatch(r"[A-Za-z0-9_]{1,64}", key):
             return JSONResponse({"code": 10001, "message": "invalid avatar key"}, status_code=400)
+        if kind not in ("bot", "user", "npc", "group", "guild"):
+            kind = "user"
         return Response(
-            content=avatar_svg(key),
+            content=avatar_svg(key, label[:16], kind),
             media_type="image/svg+xml",
             headers={"Cache-Control": "public, max-age=3600"},
         )

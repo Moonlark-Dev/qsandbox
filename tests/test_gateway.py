@@ -58,8 +58,13 @@ async def test_resume_replays_missed_events(mqs) -> None:
         )
         resumed = json.loads(await asyncio.wait_for(ws2.recv(), 2))
         assert resumed["t"] == "RESUMED"
-        event = json.loads(await asyncio.wait_for(ws2.recv(), 2))
-        assert event["t"] == "GROUP_AT_MESSAGE_CREATE"
+        event = None
+        for _ in range(10):
+            frame = json.loads(await asyncio.wait_for(ws2.recv(), 2))
+            if frame.get("t") == "GROUP_AT_MESSAGE_CREATE":
+                event = frame
+                break
+        assert event is not None, "missed group message was not replayed"
         assert "while offline" in event["d"]["content"]
         assert event["s"] >= 1
     finally:

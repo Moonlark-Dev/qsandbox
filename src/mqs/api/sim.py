@@ -216,6 +216,24 @@ def _check_file_type(file_type: int) -> int:
     return FILE_LIMITS[file_type]
 
 
+def _sniff_mime(data: bytes) -> str:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"GIF8"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[4:8] == b"ftyp":
+        return "video/mp4"
+    if data.startswith(b"#!AMR"):
+        return "audio/amr"
+    if data.startswith(b"\x02#!SILK"):
+        return "audio/silk"
+    return "application/octet-stream"
+
+
 async def _store_upload(request: Request, file_type: int, data: bytes, mime: str | None) -> dict:
     world: World = get_world(request)
     limit = _check_file_type(file_type)
@@ -249,9 +267,25 @@ async def _upload(request: Request, *, kind: str, target_openid: str, bot: dict)
         req = MediaUploadRequest(**body)
         file_type = req.file_type
         srv_send_msg = req.srv_send_msg
-        if not req.url:
-            raise InvalidParam("url is required for JSON upload")
-        media = await _resolve_media_url(request, req.url, file_type)
+        if body.get("upload_id"):
+            return await world.finalize_upload(
+                bot["id"], kind, target_openid, str(body["upload_id"]),
+                srv_send_msg=body.get("srv_send_msg"),
+            )
+        file_data = body.get("file_data") or body.get("fileData")
+        if file_data:
+            import base64
+            import binascii
+
+            try:
+                decoded = base64.b64decode(str(file_data), validate=False)
+            except (ValueError, binascii.Error) as exc:
+                raise InvalidParam(f"invalid base64 file_data: {exc}") from None
+            media = await _store_upload(request, file_type, decoded, _sniff_mime(decoded))
+        elif req.url:
+            media = await _resolve_media_url(request, req.url, file_type)
+        else:
+            raise InvalidParam("url or file_data is required for JSON upload")
     mhash = media["hash"]
     result: dict[str, Any] = {
         "file_uuid": mhash,
@@ -298,6 +332,62 @@ async def _resolve_media_url(request: Request, url: str, file_type: int) -> dict
     raise InvalidParam("unsupported media url (use /media/<sha256> or mqs://media/<sha256>)")
 
 
+async def _prepare_upload(request: Request, kind: str, target_openid: str, bot: dict) -> dict:
+    world: World = get_world(request)
+    body = await request.json()
+    info = await world.prepare_upload(bot["id"], kind, target_openid, body)
+    base = str(request.base_url).rstrip("/")
+    parts = [
+        {"index": index, "presigned_url": f"{base}/v2/uploads/{info['upload_id']}/parts/{index}"}
+        for index in range(info["count"])
+    ]
+    return {
+        "upload_id": info["upload_id"],
+        "block_size": info["block_size"],
+        "parts": parts,
+        "upload_config": {"concurrency": 1, "retry_timeout": 0, "retry_delay": 0},
+    }
+
+
+@router.post("/v2/groups/{group_openid}/upload_prepare")
+async def group_upload_prepare(group_openid: str, request: Request, bot: dict = Depends(require_bot)) -> dict:
+    return await _prepare_upload(request, "group", group_openid, bot)
+
+
+@router.post("/v2/users/{openid}/upload_prepare")
+async def c2c_upload_prepare(openid: str, request: Request, bot: dict = Depends(require_bot)) -> dict:
+    return await _prepare_upload(request, "user", openid, bot)
+
+
+@router.put("/v2/uploads/{upload_id}/parts/{index}")
+async def put_upload_part(upload_id: str, index: int, request: Request) -> Response:
+    world: World = get_world(request)
+    world.put_upload_part(upload_id, index, await request.body())
+    return Response(status_code=204)
+
+
+async def _finish_part(request: Request) -> Response:
+    world: World = get_world(request)
+    body = await request.json()
+    world.finish_upload_part(
+        str(body.get("upload_id") or ""),
+        int(body.get("part_index") or 0),
+        int(body.get("block_size") or 0),
+        str(body.get("md5") or ""),
+    )
+    return Response(status_code=204)
+
+
+@router.post("/v2/groups/{group_openid}/upload_part_finish")
+async def group_upload_part_finish(group_openid: str, request: Request, bot: dict = Depends(require_bot)) -> Response:
+    return await _finish_part(request)
+
+
+@router.post("/v2/users/{openid}/upload_part_finish")
+async def c2c_upload_part_finish(openid: str, request: Request, bot: dict = Depends(require_bot)) -> Response:
+    return await _finish_part(request)
+
+
 @router.post("/v2/groups/{group_openid}/files")
 async def upload_group_file(group_openid: str, request: Request, bot: dict = Depends(require_bot)) -> dict:
     return await _upload(request, kind="group", target_openid=group_openid, bot=bot)
@@ -324,10 +414,16 @@ async def download_media(hash: str, request: Request) -> Response:
 
 
 @router.get("/avatars/{key}.svg")
-async def avatar(key: str) -> Response:
+async def avatar(key: str, label: str = "", kind: str = "user") -> Response:
     if not AVATAR_RE.match(key):
         raise InvalidParam("invalid avatar key")
-    return Response(content=avatar_svg(key), media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=3600"})
+    if kind not in ("bot", "user", "npc", "group", "guild"):
+        kind = "user"
+    return Response(
+        content=avatar_svg(key, label[:16], kind),
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 @router.get("/guilds/{guild_id}")

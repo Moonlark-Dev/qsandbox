@@ -54,7 +54,7 @@ import mqs.compat.botpy   # 必须在创建 botpy.Client 之前 import
 ## 回归方式
 
 ```bash
-pytest tests/                      # 86 项，含网关/消息/限流/频道/场景/CLI/模糊测试
+pytest tests/                      # 90 项，含网关/消息/限流/频道/场景/CLI/模糊测试
 MQS_BASE_URL=http://127.0.0.1:5700 python examples/botpy_echo/bot.py
 mqs script run smoke               # 需要上面这个 echo bot 在线
 ```

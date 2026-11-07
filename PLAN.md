@@ -284,7 +284,7 @@ v0.1 已落地并通过验收：
 
 | 项 | 结果 |
 |---|---|
-| 测试 | `pytest` 86 项全绿（契约/鉴权/网关/消息/限流/媒体/频道/场景/CLI/模糊测试） |
+| 测试 | `pytest` 90 项全绿（契约/鉴权/网关/消息/限流/媒体/频道/场景/CLI/模糊测试） |
 | 真实 SDK | botpy（qq-botpy）echo bot 全链路通过：登录 → 网关鉴权 → 心跳 → 群 @ 收消息 → 被动回复 |
 | 契约 | 23 条端点：12 已实现（9 full + 3 partial），11 stub；`mqs contract export` 生成 `docs/COVERAGE.md` 与 `web/src/types/api.ts` |
 | GUI | Vue 3 四页（状态/配置/聊天/调试器）已构建并由控制 API 托管，Firefox 实测无 console error |
@@ -349,7 +349,7 @@ v0.1 已落地并通过验收：
   `/channels/{id}`、`/channels/{id}/messages`（GET/POST）、`/channels/{id}/messages/{msg_id}`
 - 网关：`MESSAGE_CREATE`（intent 1<<9）与 `AT_MESSAGE_CREATE`（intent 1<<30）
 - 频道消息：5/s/频道、主动 20/天/频道、2 频道/天、被动 5 分钟
-- 覆盖率：**25 条中 24 已实现**（21 full + 3 partial），仅 `/users/@me/dms` 保持 stub；新增内邀接口
+- 覆盖率：**30 条中 29 已实现**（26 full + 3 partial），仅 `/users/@me/dms` 保持 stub；新增内邀接口
   `GET /v2/groups/{group_openid}/members`（60 QPM）与 `.../members/{member_openid}`（30 QPM）
 
 ### 12.3 桌面端（Electron）
@@ -380,7 +380,7 @@ v0.1 已落地并通过验收：
   `feature.expose=public` 时这些接口 404；60/30 QPM 读取限额。Bot 接入弹窗可显示/复制
   nonebot-adapter-qq 的 `QQ_API_BASE` / `QQ_AUTH_BASE` / `QQ_CUSTOM_GATEWAY_URL` / `QQ_BOTS`。
 - `profiles.json` 全局索引 + `mqs profile list`；桌面端设置页/状态页可切换或新建 profile（重启 sidecar 并刷新窗口，`desktop.json` 记住选择）。
-- 测试：**86 项全绿**；`ruff check` 干净。
+- 测试：**90 项全绿**；`ruff check` 干净。
 
 ### 12.6 仍未完成（诚实清单）
 
@@ -388,7 +388,6 @@ v0.1 已落地并通过验收：
 |---|---|
 | 系统钥匙串存 Bot secret / 控制 token（`--insecure-store`） | 未做，secret 仍在 SQLite；文档 §8 的安全增强 |
 | `--record` 保存可重放 fixture、`--script x.ts/x.py` 逃生口 | 未做 |
-| 分片上传预处理（`file_type` 大文件） | 未做，只支持整文件上传 |
 | Koishi / NoneBot / qq-bot-sdk 兼容矩阵 | 只实测 botpy；CI 里有 botpy job；nonebot-adapter-qq 配置项已按源码提供但未起真实 NoneBot 实例 |
 | 频道权限位（角色 → 细粒度 permissions） | 角色结构有了，权限判定未做 |
 | Nuitka sidecar | 用 PyInstaller 替代 |

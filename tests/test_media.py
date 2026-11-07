@@ -101,3 +101,66 @@ async def test_media_path_is_safe(mqs) -> None:
         assert (await client.get("/media/" + "0" * 64)).status_code == 400
         traversal = await client.get("/media/..%2F..%2Fetc%2Fpasswd")
         assert traversal.status_code in (400, 404)
+
+
+async def test_upload_json_file_data(mqs) -> None:
+    import base64
+
+    headers = await mqs.bot_headers()
+    group_openid = await mqs.world.openid("10000", "group", await mqs.group_id())
+    async with httpx.AsyncClient(base_url=mqs.sim_base) as client:
+        response = await client.post(
+            f"/v2/groups/{group_openid}/files",
+            headers=headers,
+            json={"file_type": 1, "file_data": base64.b64encode(PNG).decode(), "srv_send_msg": False},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["file_info"].startswith("mqs-file-")
+
+
+async def test_chunked_upload_flow(mqs) -> None:
+    import hashlib
+
+    headers = await mqs.bot_headers()
+    group_openid = await mqs.world.openid("10000", "group", await mqs.group_id())
+    data = PNG * 3
+    async with httpx.AsyncClient(base_url=mqs.sim_base, timeout=30) as client:
+        prepare = await client.post(
+            f"/v2/groups/{group_openid}/upload_prepare",
+            headers=headers,
+            json={
+                "file_type": 1,
+                "file_name": "chunk.png",
+                "file_size": len(data),
+                "md5": hashlib.md5(data).hexdigest(),
+                "sha1": hashlib.sha1(data).hexdigest(),
+                "md5_10m": hashlib.md5(data[: 10 * 1024 * 1024]).hexdigest(),
+                "srv_send_msg": False,
+            },
+        )
+        assert prepare.status_code == 200, prepare.text
+        info = prepare.json()
+        assert info["upload_id"] and info["parts"]
+        for part in info["parts"]:
+            start = part["index"] * info["block_size"]
+            chunk = data[start : start + info["block_size"]]
+            put = await client.put(part["presigned_url"], content=chunk)
+            assert put.status_code == 204, put.text
+            finish = await client.post(
+                f"/v2/groups/{group_openid}/upload_part_finish",
+                headers=headers,
+                json={
+                    "upload_id": info["upload_id"],
+                    "part_index": part["index"],
+                    "block_size": len(chunk),
+                    "md5": hashlib.md5(chunk).hexdigest(),
+                },
+            )
+            assert finish.status_code == 204, finish.text
+        final = await client.post(
+            f"/v2/groups/{group_openid}/files",
+            headers=headers,
+            json={"upload_id": info["upload_id"]},
+        )
+        assert final.status_code == 200, final.text
+        assert final.json()["file_uuid"] == hashlib.sha256(data).hexdigest()
