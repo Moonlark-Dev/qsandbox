@@ -1,0 +1,20 @@
+# MQS
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+profiles/
+.mqs/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+web/dist/
+web/node_modules/
+.env
+.DS_Store
+
+*.log

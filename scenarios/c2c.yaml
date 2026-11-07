@@ -1,0 +1,28 @@
+name: c2c
+description: 单聊冒烟：用户私聊 Bot -> Bot 回复（需要被测 Bot 在线）
+setup:
+  settings:
+    rate_mode: "off"
+    require_online: true
+  bots:
+    - app_id: "10000"
+      name: MQS Echo Bot
+      scopes: [group_message, c2c_message, media]
+  users:
+    - alias: alice
+      name: 私聊测试用户
+steps:
+  - send:
+      as: alice
+      to: "dm:10000:{{alice}}"
+      text: hello-c2c
+  - expect_event:
+      type: C2C_MESSAGE_CREATE
+      conversation: "dm:10000:{{alice}}"
+      content_contains: hello-c2c
+      timeout: 3s
+  - expect_message:
+      conversation: "dm:10000:{{alice}}"
+      direction: out
+      content_contains: hello-c2c
+      timeout: 15s

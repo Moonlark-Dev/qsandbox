@@ -1,0 +1,187 @@
+"""Contract tooling: coverage matrix, TypeScript types, docs."""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from ..models import control as control_models
+from ..models import protocol as protocol_models
+from .registry import REGISTRY, Endpoint, endpoint, sim_endpoints, summary
+
+PROTOCOL_MODELS = [
+    protocol_models.AppAccessTokenRequest,
+    protocol_models.AppAccessTokenResponse,
+    protocol_models.ErrorPayload,
+    protocol_models.MessageReference,
+    protocol_models.MediaInfo,
+    protocol_models.MessageSendRequest,
+    protocol_models.MessageResponse,
+    protocol_models.MediaUploadRequest,
+    protocol_models.MediaUploadResponse,
+    protocol_models.BotUser,
+    protocol_models.ReadyData,
+    protocol_models.IdentifyData,
+    protocol_models.ResumeData,
+    protocol_models.GatewayInfo,
+    protocol_models.UserPayload,
+    protocol_models.MessagePayload,
+    protocol_models.GroupSummary,
+    protocol_models.GatewayFrame,
+    protocol_models.WebhookAck,
+]
+
+CONTROL_MODELS = [
+    control_models.UserCreate,
+    control_models.UserPatch,
+    control_models.GroupCreate,
+    control_models.GroupPatch,
+    control_models.MemberAdd,
+    control_models.MemberPatch,
+    control_models.BotCreate,
+    control_models.BotPatch,
+    control_models.ChatSend,
+    control_models.ClockAdvance,
+    control_models.ClockSet,
+    control_models.SettingsPatch,
+    control_models.RuleCreate,
+    control_models.ScenarioRunRequest,
+    control_models.RandomUsersRequest,
+    control_models.ExpectEvent,
+]
+
+
+def coverage_markdown() -> str:
+    data = summary()
+    lines = [
+        "# MQS 接口覆盖率",
+        "",
+        f"> 自动生成 · 文档快照 {__import__('mqs.contract.registry', fromlist=['DOC_DATE']).DOC_DATE} · 请勿手改",
+        "",
+        f"**{data['ascii']}**",
+        "",
+        "| 层级 | 总数 | full | partial | stub | n/a |",
+        "|---|---|---|---|---|---|",
+    ]
+    for layer in sorted(data["by_layer"]):
+        counts = data["by_layer"][layer]
+        total = sum(counts.values())
+        lines.append(
+            f"| {layer} | {total} | {counts.get('full', 0)} | {counts.get('partial', 0)} | "
+            f"{counts.get('stub', 0)} | {counts.get('n/a', 0)} |"
+        )
+    lines += ["", "## 明细", "", "| 方法 | 路径 | 覆盖 | 鉴权 | 分层 | 说明 |", "|---|---|---|---|---|---|"]
+    for e in sorted(sim_endpoints(), key=lambda x: (x.layer, x.path, x.method)):
+        auth = {"bot": "Bot Token", "app": "appid+secret", "none": "无"}.get(e.auth, e.auth)
+        lines.append(f"| `{e.method}` | `{e.path}` | {e.coverage} | {auth} | {e.layer} | {e.summary} |")
+    lines.append("")
+    lines.append("覆盖等级：`full` 行为保真 · `partial` 字段或分支不全 · `stub` 仅返回结构 · `n/a` 明确不模拟。")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _ts_type(schema: dict[str, Any], defs: dict[str, Any], indent: int = 0) -> str:
+    if "$ref" in schema:
+        return schema["$ref"].rsplit("/", 1)[-1]
+    if "anyOf" in schema:
+        parts = [_ts_type(s, defs, indent) for s in schema["anyOf"]]
+        # collapse Optional[T] / null
+        uniq: list[str] = []
+        for p in parts:
+            if p not in uniq:
+                uniq.append(p)
+        return " | ".join(uniq)
+    if "oneOf" in schema:
+        return " | ".join(_ts_type(s, defs, indent) for s in schema["oneOf"])
+    if "enum" in schema:
+        return " | ".join(json.dumps(v, ensure_ascii=False) for v in schema["enum"])
+    if "const" in schema:
+        return json.dumps(schema["const"], ensure_ascii=False)
+    t = schema.get("type")
+    if isinstance(t, list):
+        return " | ".join(_ts_type({**schema, "type": x}, defs, indent) for x in t)
+    if t == "string":
+        return "string"
+    if t == "integer" or t == "number":
+        return "number"
+    if t == "boolean":
+        return "boolean"
+    if t == "null":
+        return "null"
+    if t == "array":
+        return f"Array<{_ts_type(schema.get('items', {}), defs, indent)}>"
+    if t == "object" or "properties" in schema:
+        props = schema.get("properties") or {}
+        if not props:
+            extra = schema.get("additionalProperties")
+            if isinstance(extra, dict):
+                return f"Record<string, {_ts_type(extra, defs, indent)}>"
+            return "Record<string, any>"
+        required = set(schema.get("required") or [])
+        pad = " " * (indent + 2)
+        lines = ["{"]
+        for name, prop in props.items():
+            opt = "" if name in required else "?"
+            lines.append(f"{pad}{name}{opt}: {_ts_type(prop, defs, indent + 2)};")
+        extra = schema.get("additionalProperties")
+        if isinstance(extra, dict):
+            lines.append(f"{pad}[key: string]: {_ts_type(extra, defs, indent + 2)};")
+        lines.append(" " * indent + "}")
+        return "\n".join(lines)
+    return "any"
+
+
+def typescript() -> str:
+    chunks: list[str] = [
+        "// AUTO-GENERATED by `mqs contract export` — do not edit by hand.",
+        "// Source: Pydantic models in src/mqs/models/*.py",
+        "",
+    ]
+    for model in PROTOCOL_MODELS + CONTROL_MODELS:
+        schema = model.model_json_schema()
+        defs = schema.get("$defs") or {}
+        # emit $defs once, deduplicated by name
+        body = _ts_type(schema, defs, 0)
+        chunks.append(f"export interface {model.__name__} {body}")
+        chunks.append("")
+        emitted = getattr(typescript, "_emitted_defs", set())  # type: ignore[attr-defined]
+        for name, sub in defs.items():
+            if name in emitted:
+                continue
+            subschema = dict(sub)
+            subschema.pop("title", None)
+            chunks.append(f"export interface {name} {_ts_type(subschema, defs, 0)}")
+            chunks.append("")
+            emitted.add(name)
+        typescript._emitted_defs = emitted  # type: ignore[attr-defined]
+    typescript._emitted_defs = set()  # type: ignore[attr-defined]
+    return "\n".join(chunks)
+
+
+def routes_table() -> list[dict[str, Any]]:
+    return [
+        {
+            "key": e.key,
+            "method": e.method,
+            "path": e.path,
+            "coverage": e.coverage,
+            "auth": e.auth,
+            "layer": e.layer,
+            "summary": e.summary,
+            "errors": list(e.errors),
+            "doc_date": e.doc_date,
+        }
+        for e in sim_endpoints()
+    ]
+
+
+__all__ = [
+    "REGISTRY",
+    "Endpoint",
+    "endpoint",
+    "sim_endpoints",
+    "summary",
+    "coverage_markdown",
+    "typescript",
+    "routes_table",
+]

@@ -1,0 +1,38 @@
+name: passive_window
+description: 被动回复 5 分钟窗口：快进 6 分钟后回复应返回 40057
+setup:
+  settings:
+    rate_mode: "off"
+    require_online: false
+    passive_window_ms: 300000
+  bots:
+    - app_id: "10001"
+      name: MQS Offline Bot
+      scopes: [group_message, c2c_message, media]
+  users:
+    - alias: alice
+      name: 窗口测试用户
+  groups:
+    - alias: room
+      name: 窗口测试群
+      owner: alice
+      members: [alice]
+      bots: ["10001"]
+steps:
+  - send:
+      as: alice
+      to: room
+      text: window-ping
+      at_bots: ["10001"]
+  - advance: 6m
+  - http:
+      bot: "10001"
+      method: POST
+      target: group
+      group: room
+      path: /v2/groups/{openid}/messages
+      json:
+        content: too-late
+        msg_id: "{{incoming_msg_id}}"
+      expect_status: 400
+      expect_code: 40057

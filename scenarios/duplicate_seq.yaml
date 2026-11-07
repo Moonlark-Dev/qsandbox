@@ -1,0 +1,48 @@
+name: duplicate_seq
+description: 相同 msg_id + msg_seq 重复发送应返回 40054
+setup:
+  settings:
+    rate_mode: "off"
+    require_online: false
+  bots:
+    - app_id: "10001"
+      name: MQS Offline Bot
+      scopes: [group_message, c2c_message, media]
+  users:
+    - alias: alice
+      name: 去重测试用户
+  groups:
+    - alias: room
+      name: 去重测试群
+      owner: alice
+      members: [alice]
+      bots: ["10001"]
+steps:
+  - send:
+      as: alice
+      to: room
+      text: dup-ping
+      at_bots: ["10001"]
+  - http:
+      bot: "10001"
+      method: POST
+      target: group
+      group: room
+      path: /v2/groups/{openid}/messages
+      json:
+        content: first
+        msg_id: "{{incoming_msg_id}}"
+        msg_seq: 1
+      expect_status: 200
+  - http:
+      bot: "10001"
+      method: POST
+      target: group
+      group: room
+      path: /v2/groups/{openid}/messages
+      json:
+        content: second
+        msg_id: "{{incoming_msg_id}}"
+        msg_seq: 1
+      expect_status: 400
+      expect_code: 40054

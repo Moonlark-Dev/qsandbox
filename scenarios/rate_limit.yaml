@@ -1,0 +1,56 @@
+name: rate_limit
+description: strict 档令牌桶：连续回复第 3 次应 429，且带 retry_after
+setup:
+  settings:
+    rate_mode: "strict"
+    require_online: false
+  bots:
+    - app_id: "10001"
+      name: MQS Offline Bot
+      scopes: [group_message, c2c_message, media]
+  users:
+    - alias: alice
+      name: 限流测试用户
+  groups:
+    - alias: room
+      name: 限流测试群
+      owner: alice
+      members: [alice]
+      bots: ["10001"]
+steps:
+  - send:
+      as: alice
+      to: room
+      text: rate-ping
+      at_bots: ["10001"]
+  - http:
+      bot: "10001"
+      method: POST
+      target: group
+      group: room
+      path: /v2/groups/{openid}/messages
+      json:
+        content: reply-1
+        msg_id: "{{incoming_msg_id}}"
+      expect_status: 200
+  - http:
+      bot: "10001"
+      method: POST
+      target: group
+      group: room
+      path: /v2/groups/{openid}/messages
+      json:
+        content: reply-2
+        msg_id: "{{incoming_msg_id}}"
+      expect_status: 200
+  - http:
+      bot: "10001"
+      method: POST
+      target: group
+      group: room
+      path: /v2/groups/{openid}/messages
+      json:
+        content: reply-3
+        msg_id: "{{incoming_msg_id}}"
+      expect_status: 429
+      expect_code: 42900
