@@ -247,8 +247,9 @@ async def test_keyboard_click_command_and_callback(mqs) -> None:
             )
             assert click.status_code == 200, click.text
             assert click.json()["kind"] == "command"
+            assert click.json()["delivered_to"] == ["10000"]
             after = await mqs.last_inbound(conversation)
-            assert "!jrrp r" in after["content"]
+            assert after["content"] == "!jrrp r"
 
         async with httpx.AsyncClient(base_url=mqs.sim_base) as client:
             response = await client.post(

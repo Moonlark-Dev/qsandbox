@@ -1212,6 +1212,7 @@ class World:
         msg_type: int = 0,
         mentions: Sequence[str] | None = None,
         at_bots: Sequence[str] | None = None,
+        implicit_bots: Sequence[str] | None = None,
         reply_to: str | None = None,
     ) -> dict[str, Any]:
         await self.ensure_conversation(conversation_id)
@@ -1234,7 +1235,9 @@ class World:
                 "SELECT b.* FROM group_bots gb JOIN bots b ON b.id=gb.bot_id WHERE gb.group_id=?", (conv["peer_id"],)
             )
             mention_ids = list(dict.fromkeys(list(mentions or []) + list(at_bots or [])))
-            if at_bots is not None:
+            if implicit_bots is not None:
+                target_bot_ids = [b for b in implicit_bots if any(r["id"] == b for r in bot_rows)]
+            elif at_bots is not None:
                 target_bot_ids = [b for b in at_bots if any(r["id"] == b for r in bot_rows)]
             elif mentions:
                 target_bot_ids = [b for b in mention_ids if any(r["id"] == b for r in bot_rows)]
@@ -1317,7 +1320,8 @@ class World:
                 if conv["type"] == "group":
                     payload["group_openid"] = group_openid
                     payload["group_id"] = conv["peer_id"]
-                    if bot["id"] in target_bot_ids:
+                    explicit = at_bots is None or bot["id"] in at_bots
+                    if bot["id"] in target_bot_ids and explicit:
                         bot_openid = openid_for(bot["app_id"], "bot", bot["id"])
                         payload["content"] = f"<@!{bot_openid}> {content}" if content else f"<@!{bot_openid}>"
                 else:
@@ -1561,11 +1565,16 @@ class World:
                 bot, bot_id, user_id, conversation_id, message_id, button, data, index
             )
             return {"kind": "callback", "data": data, "interaction": interaction, "message": None}
-        at_bots = [bot_id] if conversation_id.startswith("group:") else None
         if conversation_id.startswith("channel:"):
             result = await self.send_as_user_to_channel(conversation_id.split(":", 1)[1], user_id, data)
         else:
-            result = await self.send_as_user(conversation_id, user_id, data, at_bots=at_bots)
+            result = await self.send_as_user(
+                conversation_id,
+                user_id,
+                data,
+                at_bots=[] if conversation_id.startswith("group:") else None,
+                implicit_bots=[bot_id] if conversation_id.startswith("group:") else None,
+            )
         return {"kind": "command", "data": data, **result}
 
     async def _emit_button_interaction(
