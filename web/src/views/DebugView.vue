@@ -13,6 +13,7 @@ const search = ref('')
 const selected = ref<any>(null)
 const events = ref<any[]>([])
 const autoScroll = ref(true)
+const hideHeartbeat = ref(true)
 
 let offFrame: (() => void) | undefined
 let offEvent: (() => void) | undefined
@@ -25,6 +26,7 @@ const filteredFrames = computed(() => {
   return frames.value.filter((frame) => {
     if (kind.value && frame.kind !== kind.value) return false
     if (botId.value && frame.bot_id !== botId.value) return false
+    if (hideHeartbeat.value && /op=1\b/.test(frame.summary || '')) return false
     if (q && !(frame.summary || '').toLowerCase().includes(q) && !JSON.stringify(frame.data || {}).toLowerCase().includes(q)) return false
     return true
   })
@@ -146,6 +148,9 @@ function markClass(frame: any): string {
         </select>
         <input v-model="search" class="input" placeholder="搜索 summary / JSON" style="width: 200px" />
         <div class="spacer"></div>
+        <label class="switch small">
+          <input v-model="hideHeartbeat" type="checkbox" /><span class="track"><span class="thumb"></span></span> 隐藏心跳
+        </label>
         <label class="switch small">
           <input v-model="paused" type="checkbox" /><span class="track"><span class="thumb"></span></span> 暂停
         </label>

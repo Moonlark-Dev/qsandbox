@@ -45,8 +45,13 @@ class OriginGuardMiddleware(BaseHTTPMiddleware):
             origin = request.headers.get("origin")
             if origin:
                 host = urlparse(origin).hostname or ""
-                allowed = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
-                for extra in request.app.state.config.control_origins:
+                config = request.app.state.config
+                allowed = {"127.0.0.1", "localhost", "::1", "0.0.0.0", "::"}
+                if config.public_host:
+                    allowed.add(config.public_host)
+                if config.dial_host:
+                    allowed.add(config.dial_host)
+                for extra in config.control_origins:
                     allowed.add(urlparse(extra).hostname or extra)
                 if host not in allowed:
                     return JSONResponse(

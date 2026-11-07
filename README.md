@@ -11,6 +11,10 @@ mqs serve  →  Simulate API :5700   (QQ 兼容 /v2/*、网关 WebSocket)
            →  SQLite + media       (单进程、WAL、内容哈希寻址)
 ```
 
+![状态页](docs/screenshots/status.png)
+
+<sub>状态页：接入信息卡、覆盖率、profile；聊天与调试器见 [docs/screenshots](./docs/screenshots)。</sub>
+
 ## 快速开始
 
 ```bash
