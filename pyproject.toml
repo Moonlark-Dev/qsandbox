@@ -32,7 +32,7 @@ desktop = ["pyinstaller>=6"]
 mqs = "mqs.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/Moonlark-Dev/qsandbox"
+Homepage = "https://github.com/This-is-XiaoDeng/QSandbox"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mqs"]
