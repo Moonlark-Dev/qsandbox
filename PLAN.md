@@ -354,11 +354,11 @@ v0.1 已落地并通过验收：
 
 ### 12.3 桌面端（Electron）
 
-- `desktop/src/main.ts` 启动 MQS sidecar（`build-sidecar/mqs`，PyInstaller onefile），读 stdout
+- `desktop/src/main.ts` 启动 MQS sidecar（`build-sidecar/mqs`，onefile），读 stdout
   JSON 握手，再用同一份 Vue 前端加载 GUI；退出时回收 sidecar（含 3.5s 兜底与 `os._exit` 清理）。
 - 已构建并实测 `QSandbox-0.1.0-x86_64.AppImage`（142 MB），Xvfb 下启动、加载、截图、退出正常。
 - Windows/macOS 由 `.github/workflows/desktop.yml` matrix 构建。
-- sidecar 用 PyInstaller（文档原定 Nuitka）；替换 `tools/build_sidecar.py` 即可切回 Nuitka。
+- sidecar 打包器 v0.2 用 PyInstaller，**v0.3 起改回 Nuitka**（`tools/build_sidecar.py`）。
 
 ### 12.4 GUI 修正
 
@@ -390,7 +390,6 @@ v0.1 已落地并通过验收：
 | `--record` 保存可重放 fixture、`--script x.ts/x.py` 逃生口 | 未做 |
 | Koishi / NoneBot / qq-bot-sdk 兼容矩阵 | 只实测 botpy；CI 里有 botpy job；nonebot-adapter-qq 配置项已按源码提供但未起真实 NoneBot 实例 |
 | 频道权限位（角色 → 细粒度 permissions） | 角色结构有了，权限判定未做 |
-| Nuitka sidecar | 用 PyInstaller 替代 |
 | Tauri 桌面壳 | 按用户决定改为 Electron |
 
 ---
@@ -467,4 +466,13 @@ v0.1 已落地并通过验收：
 | Koishi / NoneBot / qq-bot-sdk 兼容矩阵 | 只实测 botpy；nonebot-adapter-qq 仅提供配置 |
 | Webhook Ed25519 真机签名校验 | 仅按公开资料实现握手 |
 | 错误码 40034/40054/40055/40057 真机抓包校正 | 未做，集中表已就位 |
-| Nuitka sidecar / Tauri 桌面壳 | 用 PyInstaller + Electron 替代 |
+| Tauri 桌面壳 | 用 Electron 替代 |
+
+### 13.8 构建与发布（2026-11-07）
+
+- sidecar 打包从 PyInstaller 换回 **Nuitka onefile**（`nuitka[onefile]`；Linux 额外装 `patchelf`）。
+  `tools/build_sidecar.py` 会把 `web/dist` 与 `schema*.sql` 一起打进单文件。
+- CI 新增 `build` job：构建前端 → Nuitka 编译 sidecar → 起进程做握手冒烟 → 上传
+  `qsandbox-sidecar-linux` artifact。
+- `desktop.yml` 改为只在 **push 到 main** 和三平台打包（产物作为 Actions artifact）。
+- 新增 `release.yml`：push `v*` tag 时三平台打包，`publish` job 汇总后上传到 GitHub Release。

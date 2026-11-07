@@ -1,4 +1,4 @@
-"""PyInstaller/Nuitka entry point for the MQS server sidecar."""
+"""Nuitka entry point for the MQS server sidecar."""
 
 from mqs.cli import main
 

@@ -69,7 +69,7 @@ mqs script run smoke               # 需要上面这个 echo bot 在线
   个人认证与企业认证限额一致，已合并为 `certified` 一档。
 - L2 频道家族已从 stub 升级为实现：默认 profile 带一个 “QSandbox 测试频道”，
   支持 guild/channel/member/role 查询、频道消息收发的 `MESSAGE_CREATE` / `AT_MESSAGE_CREATE`。
-- 桌面端：按用户决定由 Tauri 改为 **Electron**（`desktop/`），sidecar 用 PyInstaller onefile；
+- 桌面端：按用户决定由 Tauri 改为 **Electron**（`desktop/`），sidecar 用 Nuitka onefile；
   AppImage 已在 Xvfb 下实测启动/退出。
 
 ## 接口白名单（内邀接口）

@@ -57,6 +57,43 @@ jobs:
       - run: npx vue-tsc --noEmit
       - run: npm run build
 
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build web
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      - name: Build sidecar (Nuitka)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[build]"
+          python tools/build_sidecar.py
+      - name: Smoke test sidecar
+        run: |
+          mkdir -p /tmp/mqs-sidecar-home
+          MQS_HOME=/tmp/mqs-sidecar-home ./build-sidecar/mqs serve --profile ci --port 5750 --control-port 5751 --token ci-token > /tmp/mqs-sidecar.log 2>&1 &
+          pid=$!
+          for i in $(seq 1 60); do grep -q '"gui_url"' /tmp/mqs-sidecar.log && break; sleep 0.5; done
+          grep -q '"gui_url"' /tmp/mqs-sidecar.log
+          kill "$pid" || true
+          wait "$pid" || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsandbox-sidecar-linux
+          path: build-sidecar/mqs
+          if-no-files-found: error
+
   botpy-compat:
     runs-on: ubuntu-latest
     steps:

@@ -1,6 +1,7 @@
 # Moonlark QSandbox
 
 [![CI](https://github.com/Moonlark-Dev/qsandbox/actions/workflows/ci.yml/badge.svg)](https://github.com/Moonlark-Dev/qsandbox/actions/workflows/ci.yml)
+[![Release](https://github.com/Moonlark-Dev/qsandbox/actions/workflows/release.yml/badge.svg)](https://github.com/Moonlark-Dev/qsandbox/actions/workflows/release.yml)
 
 Moonlark QSandbox 一个是 QQ Bot API 沙箱，您可以在此随意创建虚拟用户，并对您的 Bot 进行测试。
 
@@ -68,7 +69,7 @@ mqs status --json
 
 ```bash
 cd web && npm install && npm run build
-cd .. && pip install -e ".[build]" && python tools/build_sidecar.py
+cd .. && pip install -e ".[build]" && python tools/build_sidecar.py   # Nuitka onefile
 cd desktop && npm install && npm run dist:linux   # release/QSandbox-*.AppImage
 # 或开发模式：npm start（自动拉起 build-sidecar/mqs）
 ```

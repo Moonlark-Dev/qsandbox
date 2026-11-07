@@ -37,7 +37,7 @@ cd desktop && npm run dist:linux       # release/QSandbox-*.AppImage + .deb
 ```
 
 Windows/macOS：`npm run dist:win` / `npm run dist:mac`，需要对应平台或 CI matrix。
-产物里 `resources/sidecar/mqs` 是 PyInstaller onefile，内含 Python 运行时与 `web/dist`。
+产物里 `resources/sidecar/mqs` 是 Nuitka onefile，内含 Python 运行时与 `web/dist`。
 
 ## 已验证
 
@@ -46,5 +46,5 @@ Windows/macOS：`npm run dist:win` / `npm run dist:mac`，需要对应平台或 
 
 ## 说明
 
-- 当前用 PyInstaller 打 sidecar；文档写的是 Nuitka，CI 可替换 `tools/build_sidecar.py` 的实现，Electron 侧不变。
+- sidecar 用 Nuitka onefile 打包（`pip install -e ".[build]"`）；Electron 侧只认 `build-sidecar/mqs`，换打包器不影响桌面壳。
 - 桌面端没有额外业务逻辑；协议、CLI、MCP 仍全部在 Python 侧。

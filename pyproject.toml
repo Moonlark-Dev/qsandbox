@@ -25,8 +25,15 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.8"]
-build = ["pyinstaller>=6"]
-desktop = ["pyinstaller>=6"]
+build = [
+    "nuitka[onefile]>=2.5",
+    # Nuitka standalone builds on Linux need patchelf to fix rpaths.
+    "patchelf>=0.17; sys_platform == 'linux'",
+]
+desktop = [
+    "nuitka[onefile]>=2.5",
+    "patchelf>=0.17; sys_platform == 'linux'",
+]
 
 [project.scripts]
 mqs = "mqs.cli:main"
