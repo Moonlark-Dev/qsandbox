@@ -21,6 +21,9 @@ dependencies = [
     "pyyaml>=6.0",
     "mcp>=2.0",
     "python-multipart>=0.0.9",
+    # Windows (and slim containers) ship no IANA zoneinfo database, and
+    # mqs.clock resolves ZoneInfo("Asia/Shanghai") at import time.
+    "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]

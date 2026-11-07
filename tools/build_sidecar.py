@@ -54,6 +54,8 @@ CANDIDATE_PACKAGES = [
     "python_multipart",
     "multipart",
     "dotenv",
+    # Windows has no system zoneinfo database; mqs.clock needs this at import.
+    "tzdata",
 ]
 
 EXE_NAME = "mqs.exe" if sys.platform == "win32" else "mqs"
@@ -93,6 +95,9 @@ def build_args(onefile: bool, reuse_build_dir: bool) -> list[str]:
     # executable 'mqs'").
     for schema in sorted((ROOT / "src" / "mqs").glob("schema*.sql")):
         args.append(f"--include-data-files={schema}=mqs_data/{schema.name}")
+    # `--include-package=tzdata` carries the packaged zoneinfo database along
+    # with the modules (Nuitka 4 keeps package data), which is the only way a
+    # Windows build can resolve ZoneInfo("Asia/Shanghai").
     for package in include_packages():
         args.append(f"--include-package={package}")
     # Optional SDK shims must not leak into the sandbox binary, otherwise the

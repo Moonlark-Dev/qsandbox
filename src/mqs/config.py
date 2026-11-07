@@ -28,6 +28,37 @@ class ProfileLocked(RuntimeError):
     """Raised when another process already owns this profile."""
 
 
+def _lock_file(handle) -> None:
+    """Take a non-blocking exclusive lock on an open file (POSIX or Windows)."""
+    if sys.platform == "win32":
+        import msvcrt
+
+        # msvcrt locks a byte range, and the range must exist even before the
+        # pid is written.
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write("\0")
+            handle.flush()
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        return
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_file(handle) -> None:
+    if sys.platform == "win32":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 @dataclass(frozen=True)
 class ProfilePaths:
     home: Path
@@ -162,11 +193,9 @@ class ProfileLock:
 
     def acquire(self) -> None:
         self.paths.ensure()
-        import fcntl
-
         f = open(self.paths.lock, "a+", encoding="utf-8")
         try:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _lock_file(f)
         except OSError as exc:  # pragma: no cover - platform dependent
             f.close()
             raise ProfileLocked(f"profile {self.paths.name!r} is locked by another mqs process") from exc
@@ -180,9 +209,7 @@ class ProfileLock:
         if self._file is None:
             return
         try:
-            import fcntl
-
-            fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
+            _unlock_file(self._file)
         finally:
             self._file.close()
             self._file = None
