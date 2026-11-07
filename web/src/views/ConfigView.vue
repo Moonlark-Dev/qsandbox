@@ -326,6 +326,7 @@ const nonebotBots = computed(() => {
   return JSON.stringify([
     {
       id: connectBot.value.app_id,
+      token: connectToken.value,
       secret: connectBot.value.secret,
       intent: nonebotIntents,
       use_websocket: true,
@@ -733,13 +734,13 @@ Client(intents=Intents(public_messages=True)).run(
           <div class="row" style="margin-bottom: 8px">
             <div class="panel-section-title" style="margin: 0">nonebot-adapter-qq 环境变量</div>
             <div class="spacer"></div>
-            <button class="btn small primary" @click="copyText(nonebotEnv, '.env 已复制')">复制全部 .env</button>
-            <button class="btn small" @click="copyText(nonebotBots, 'QQ_BOTS 已复制')">复制 QQ_BOTS</button>
+            <button class="btn small primary" :disabled="!connectToken" @click="copyText(nonebotEnv, '.env 已复制')">复制全部 .env</button>
+            <button class="btn small" :disabled="!connectToken" @click="copyText(nonebotBots, 'QQ_BOTS 已复制')">复制 QQ_BOTS</button>
           </div>
           <pre class="mono small" style="white-space: pre-wrap; word-break: break-all; background: var(--panel-2); padding: 10px; border-radius: 8px; margin: 0">{{ nonebotEnv }}</pre>
           <p class="small faint" style="margin: 8px 0 0">
-            依赖 nonebot-adapter-qq 的 <code>QQ_API_BASE</code> / <code>QQ_AUTH_BASE</code> /
-            <code>QQ_CUSTOM_GATEWAY_URL</code> / <code>QQ_BOTS</code> 配置项。token 由 adapter 用 secret 换取，无需手填。
+            兼容 nonebot-adapter-qq 1.x（<code>QQ_BOTS[].token</code> 必填）与 1.7.3+（忽略多余 token 字段）。
+            token 有效期 7200 秒，过期后重新打开本弹窗获取；新版 adapter 会自己用 secret 换 token。
           </p>
         </div>
 

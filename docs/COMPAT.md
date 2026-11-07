@@ -97,8 +97,13 @@ Bot 的 `whitelisted` 可在配置页切换（或 `mqs bot whitelist <app_id> on
 QQ_API_BASE=http://127.0.0.1:5700/
 QQ_AUTH_BASE=http://127.0.0.1:5700/app/getAppAccessToken
 QQ_CUSTOM_GATEWAY_URL=ws://127.0.0.1:5700/websocket
-QQ_BOTS=[{"id":"10000","secret":"mqs-secret-10000","intent":{...},"use_websocket":true}]
+QQ_BOTS=[{"id":"10000","token":"MQS_...","secret":"mqs-secret-10000","intent":{...},"use_websocket":true}]
 ```
 
 对应 `nonebot-adapter-qq` 的 `Config` 字段：`qq_api_base` / `qq_auth_base` /
-`qq_custom_gateway_url` / `qq_bots`（`QQ_BOTS` 里只有 id + secret，token 由 adapter 换取）。
+`qq_custom_gateway_url` / `qq_bots`。
+
+注意版本差异：`nonebot-adapter-qq` **1.0–1.6.x 的 `BotInfo` 要求 `token` 字段**
+（否则报 `qq_bots.0.token Field required`）；1.7.3+ 改为只用 `secret` 换 token，
+多余 `token` 字段会被忽略。所以 QSandbox 生成的 `QQ_BOTS` 同时带 `token` 与 `secret`，
+两端都能解析。token 有效期 7200 秒，过期后重新打开“接入信息”弹窗获取。
