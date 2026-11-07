@@ -1,6 +1,6 @@
 # QSandbox — Moonlark QSandbox
 
-[![CI](https://github.com/This-is-XiaoDeng/QSandbox/actions/workflows/ci.yml/badge.svg)](https://github.com/This-is-XiaoDeng/QSandbox/actions/workflows/ci.yml)
+[![CI](https://github.com/Moonlark-Dev/qsandbox/actions/workflows/ci.yml/badge.svg)](https://github.com/Moonlark-Dev/qsandbox/actions/workflows/ci.yml)
 
 > QQ Bot API v2 的本地沙箱：把 `base_url` / `ws_url` 指过来，Bot 就能跑完整收发。
 > **非官方项目，与腾讯无任何关联。** 所有账号、openid、token 都是 QSandbox 生成的假数据。
