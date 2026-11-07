@@ -1,0 +1,49 @@
+name: group_multi
+description: 群聊多用户：三个用户先后发言，Bot 侧收到三条 GROUP_AT_MESSAGE_CREATE
+setup:
+  settings:
+    rate_mode: "off"
+  users:
+    - alias: alice
+      name: 多用户甲
+    - alias: bob
+      name: 多用户乙
+    - alias: carol
+      name: 多用户丙
+  groups:
+    - alias: room
+      name: 多用户测试群
+      owner: alice
+      members: [alice, bob, carol]
+      bots: ["10000"]
+steps:
+  - send:
+      as: alice
+      to: room
+      text: 我是甲
+      at_bots: ["10000"]
+  - expect_event:
+      type: GROUP_AT_MESSAGE_CREATE
+      conversation: "group:{{room}}"
+      content_contains: 我是甲
+      timeout: 3s
+  - send:
+      as: bob
+      to: room
+      text: 我是乙
+      at_bots: ["10000"]
+  - expect_event:
+      type: GROUP_AT_MESSAGE_CREATE
+      conversation: "group:{{room}}"
+      content_contains: 我是乙
+      timeout: 3s
+  - send:
+      as: carol
+      to: room
+      text: 我是丙
+      at_bots: ["10000"]
+  - expect_event:
+      type: GROUP_AT_MESSAGE_CREATE
+      conversation: "group:{{room}}"
+      content_contains: 我是丙
+      timeout: 3s

@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { api } from '../api'
 import { patchSettings, refreshAll, refreshWorld, state, toast } from '../store'
 
-const tab = ref<'users' | 'groups' | 'bots' | 'world'>('users')
+const tab = ref<'users' | 'groups' | 'bots' | 'world' | 'rules'>('users')
 const errorText = ref('')
 
 const userModal = ref(false)
@@ -13,7 +13,7 @@ const groupModal = ref(false)
 const groupForm = reactive({ name: '', owner_id: '', random_members: 3, seed: '' as string | number, bot_ids: [] as string[] })
 
 const botModal = ref(false)
-const botForm = reactive({ app_id: '', name: '', scopes: 'group_message, c2c_message, media', delivery: 'ws' })
+const botForm = reactive({ app_id: '', name: '', scopes: 'group_message, c2c_message, media', delivery: 'ws', random: false })
 
 const memberModal = ref(false)
 const memberGroup = ref<any>(null)
@@ -22,6 +22,8 @@ const addUserId = ref('')
 const addRole = ref<'member' | 'admin' | 'owner'>('member')
 
 const randomCount = ref(5)
+const rules = ref<any[]>([])
+const ruleForm = reactive({ event_type: 'group_at_message_create', content: '', user_id: '', text: '', delay_ms: 0 })
 const randomSeed = ref('' as string | number)
 const randomBehavior = ref('silent')
 
@@ -29,7 +31,10 @@ const settings = computed(() => state.settings)
 const worldUsers = computed(() => state.users)
 const humanUsers = computed(() => state.users.filter((u: any) => u.actor_type === 'human'))
 
-onMounted(() => refreshWorld())
+onMounted(async () => {
+  await refreshWorld()
+  await loadRules()
+})
 
 function fail(error: unknown) {
   errorText.value = error instanceof Error ? error.message : String(error)
@@ -179,13 +184,62 @@ async function removeBotFromGroup(botId: string) {
   }
 }
 
+async function loadRules() {
+  try {
+    rules.value = await api.get<any[]>('/_mqs/rules')
+  } catch {
+    rules.value = []
+  }
+}
+
+async function createRule() {
+  try {
+    await api.post('/_mqs/rules', {
+      name: `${ruleForm.event_type} -> user`,
+      event_type: ruleForm.event_type,
+      condition: ruleForm.content ? { content_contains: ruleForm.content } : {},
+      action: { type: 'send_as_user', user_id: ruleForm.user_id, text: ruleForm.text || '{content}' },
+      delay_ms: Number(ruleForm.delay_ms) || 0,
+    })
+    await loadRules()
+    toast('规则已创建')
+  } catch (error) {
+    fail(error)
+  }
+}
+
+async function deleteRule(id: string) {
+  try {
+    await api.del(`/_mqs/rules/${id}`)
+    await loadRules()
+  } catch (error) {
+    fail(error)
+  }
+}
+
+async function addRandomAdmins() {
+  if (!memberGroup.value) return
+  try {
+    const users = await api.post<any[]>('/_mqs/users/random', { count: 3, behavior: 'chatty' })
+    for (const user of users) {
+      await api.post(`/_mqs/groups/${memberGroup.value.id}/members`, { user_id: user.id, role: 'admin' })
+    }
+    await loadMembers(memberGroup.value.id)
+    await refreshWorld()
+    toast('已加入 3 个管理员')
+  } catch (error) {
+    fail(error)
+  }
+}
+
 async function createBot() {
   try {
     await api.post('/_mqs/bots', {
-      app_id: botForm.app_id || null,
-      name: botForm.name || null,
-      scopes: botForm.scopes.split(',').map((s) => s.trim()).filter(Boolean),
+      app_id: botForm.random ? null : botForm.app_id || null,
+      name: botForm.random ? null : botForm.name || null,
+      scopes: botForm.random ? [] : botForm.scopes.split(',').map((s) => s.trim()).filter(Boolean),
       delivery: botForm.delivery,
+      random: botForm.random,
     })
     botModal.value = false
     botForm.app_id = ''
@@ -202,6 +256,18 @@ async function deleteBot(id: string) {
   try {
     await api.del(`/_mqs/bots/${id}`)
     await refreshWorld()
+  } catch (error) {
+    fail(error)
+  }
+}
+
+async function editScopes(bot: any) {
+  const next = prompt('能力集（逗号分隔）', (bot.scopes || []).join(', '))
+  if (next === null) return
+  try {
+    await api.patch(`/_mqs/bots/${bot.id}`, { scopes: next.split(',').map((s) => s.trim()).filter(Boolean) })
+    await refreshWorld()
+    toast('能力集已更新')
   } catch (error) {
     fail(error)
   }
@@ -232,8 +298,17 @@ async function rerollSeed() {
   toast(`新 seed: ${seed}`)
 }
 
-const worldSettings = computed(() => [
-  { key: 'rate_mode', label: '限流档位', type: 'select', options: ['strict', 'loose', 'off'] },
+const worldSettings = computed<any[]>(() => [
+  {
+    key: 'rate_mode',
+    label: '限流档位（QQ 官方频率政策）',
+    type: 'select',
+    options: [
+      { value: 'off', label: '关' },
+      { value: 'unverified', label: '未认证个人' },
+      { value: 'certified', label: '已认证（个人=企业）' },
+    ],
+  },
   { key: 'require_online', label: '发送消息要求 Bot 在线（保真开关）', type: 'switch' },
   { key: 'chat.auto_at_bot', label: '聊天页默认 @ 群内所有 Bot', type: 'switch' },
   { key: 'feature.whitelist', label: '模拟腾讯 IP / 权限白名单', type: 'switch' },
@@ -249,6 +324,7 @@ const worldSettings = computed(() => [
       <button class="tab" :class="{ active: tab === 'groups' }" @click="tab = 'groups'">群</button>
       <button class="tab" :class="{ active: tab === 'bots' }" @click="tab = 'bots'">Bot</button>
       <button class="tab" :class="{ active: tab === 'world' }" @click="tab = 'world'">世界设置</button>
+      <button class="tab" :class="{ active: tab === 'rules' }" @click="tab = 'rules'">规则</button>
       <div class="spacer"></div>
     </div>
 
@@ -330,6 +406,7 @@ const worldSettings = computed(() => [
               <td class="small">{{ bot.scopes.join(', ') }}</td>
               <td><span class="tag" :class="bot.online ? 'ok' : ''">{{ bot.online ? '在线' : '离线' }}</span></td>
               <td class="actions">
+                <button class="btn small" @click="editScopes(bot)">权限</button>
                 <button class="btn small" @click="rotateSecret(bot.id)">重置 secret</button>
                 <button class="btn small danger" @click="deleteBot(bot.id)">删除</button>
               </td>
@@ -340,6 +417,48 @@ const worldSettings = computed(() => [
       </div>
     </template>
 
+    <template v-else-if="tab === 'rules'">
+      <div class="grid c2">
+        <div class="card">
+          <div class="card-title">规则引擎 <span class="muted">事件 → 延迟 → 以用户身份回一句</span></div>
+          <div class="grid" style="gap: 10px">
+            <label class="field">触发事件
+              <select v-model="ruleForm.event_type" class="select">
+                <option value="group_at_message_create">group_at_message_create</option>
+                <option value="c2c_message_create">c2c_message_create</option>
+              </select>
+            </label>
+            <label class="field">内容包含（留空匹配所有）<input v-model="ruleForm.content" class="input" placeholder="例如 ping" /></label>
+            <label class="field">以哪个用户回复
+              <select v-model="ruleForm.user_id" class="select">
+                <option value="">选择用户</option>
+                <option v-for="user in humanUsers" :key="user.id" :value="user.id">{{ user.nickname }}（{{ user.id }}）</option>
+              </select>
+            </label>
+            <label class="field">回复内容<input v-model="ruleForm.text" class="input" placeholder="{content} 表示原消息" /></label>
+            <label class="field">延迟（毫秒）<input v-model="ruleForm.delay_ms" class="input" type="number" min="0" /></label>
+            <button class="btn primary" :disabled="!ruleForm.user_id" @click="createRule">创建规则</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">已启用规则</div>
+          <table class="table">
+            <thead><tr><th>事件</th><th>条件</th><th>动作</th><th>延迟</th><th></th></tr></thead>
+            <tbody>
+              <tr v-for="rule in rules" :key="rule.id">
+                <td class="small">{{ rule.event_type }}</td>
+                <td class="small">{{ rule.condition?.content_contains || '任意' }}</td>
+                <td class="small">{{ rule.action?.text }} → {{ rule.action?.user_id }}</td>
+                <td class="small">{{ rule.delay_ms }}ms</td>
+                <td class="actions"><button class="btn small danger" @click="deleteRule(rule.id)">删除</button></td>
+              </tr>
+              <tr v-if="!rules.length"><td colspan="5" class="muted">还没有规则</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
+
     <template v-else>
       <div class="grid c2">
         <div class="card">
@@ -347,8 +466,8 @@ const worldSettings = computed(() => [
           <div v-for="item in worldSettings" :key="item.key" class="kv">
             <span class="k">{{ item.label }}</span>
             <span class="v">
-              <select v-if="item.type === 'select'" class="select" style="width: 120px" :value="settings[item.key]" @change="saveSetting(item.key, ($event.target as HTMLSelectElement).value)">
-                <option v-for="option in item.options" :key="option" :value="option">{{ option }}</option>
+              <select v-if="item.type === 'select'" class="select" style="width: 150px" :value="settings[item.key]" @change="saveSetting(item.key, ($event.target as HTMLSelectElement).value)">
+                <option v-for="option in item.options" :key="option.value" :value="option.value">{{ option.label }}</option>
               </select>
               <label v-else-if="item.type === 'switch'" class="switch">
                 <input type="checkbox" :checked="!!settings[item.key]" @change="saveSetting(item.key, ($event.target as HTMLInputElement).checked)" />
@@ -442,7 +561,11 @@ const worldSettings = computed(() => [
         <div class="grid" style="gap: 12px">
           <label class="field">app_id（留空自动分配）<input v-model="botForm.app_id" class="input" placeholder="例如 10001" /></label>
           <label class="field">名称<input v-model="botForm.name" class="input" placeholder="留空则随机" /></label>
-          <label class="field">scopes（逗号分隔）<input v-model="botForm.scopes" class="input" /></label>
+          <label class="switch" style="margin-top: 4px">
+            <input v-model="botForm.random" type="checkbox" /><span class="track"><span class="thumb"></span></span>
+            随机名称与能力集
+          </label>
+          <label v-if="!botForm.random" class="field">scopes（逗号分隔）<input v-model="botForm.scopes" class="input" /></label>
           <label class="field">投递方式
             <select v-model="botForm.delivery" class="select"><option value="ws">WebSocket</option><option value="webhook">Webhook</option></select>
           </label>
@@ -467,6 +590,7 @@ const worldSettings = computed(() => [
           </select>
           <button class="btn" @click="addMember">加入成员</button>
           <button class="btn ghost" @click="randomUsers(5, 'silent', memberGroup?.id)">＋5 个潜水</button>
+          <button class="btn ghost" @click="addRandomAdmins">＋3 个管理员</button>
         </div>
         <div style="max-height: 300px; overflow: auto">
           <div v-for="member in members" :key="member.user_id" class="member-row">

@@ -24,7 +24,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.8"]
+build = ["pyinstaller>=6"]
+desktop = ["pyinstaller>=6"]
 
 [project.scripts]
 mqs = "mqs.cli:main"

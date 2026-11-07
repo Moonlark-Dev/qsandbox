@@ -19,7 +19,7 @@
 | D7 | 网关 `s` 序号 | 使用 **全局事件序号**（每个 Bot 一条投递记录），RESUME 按 `seq > last_seq` 补发 | 与草案"事件溯源"一致，且缺口对客户端无影响（botpy 只记 max）。 |
 | D8 | 被动回复去重 | `msg_id + msg_seq` 显式去重；**未显式给 `msg_seq` 时自动递增** | 真实平台是"相同 msg_id+msg_seq 重复发送失败"。但 botpy 的 `msg_seq` 默认值是 1，若严格按默认值，一条消息的第二次回复必失败——自动递增更接近 SDK 作者的实际预期，也保留显式去重分支。 |
 | D9 | 媒体 `file_type` 1/2/3/4 | v0.1 支持 1（图片）/2（视频）/3（语音），4（文件）返回 `partial` 错误 | 官方文档标注"文件（暂不开放）"。 |
-| D10 | 桌面 Tauri | **v0.1 不做**，只保证 `mqs serve` + 浏览器 | 草案非目标已排除；把精力放在协议保真和可复现。 |
+| D10 | 桌面 Tauri | **改用 Electron**（用户 2026-11-07 决定），`desktop/` 为主进程壳，Vue 前端不变 | Tauri 的运行时与打包器是 Rust，本机无 Rust 工具链；用户明确选择纯 TS/Node 的 Electron。发行物从 “Tauri + Server” 改为 “Electron + Server sidecar”。 |
 
 ---
 
@@ -273,7 +273,7 @@ mqs mcp                      # stdio MCP server
 1. 错误码 40034/40054/40055/40057 为近似值，需真机抓包校正（已在 `errors.py` 集中，改一处即可）。
 2. 频道（guild）家族仅 stub；论坛/音视频事件不模拟。
 3. webhook 的 Ed25519 签名细节按公开资料实现，真机校验需补。
-4. 桌面端（Tauri）与 `.mqsprofile` 导入导出在 v0.2。
+4. 桌面端（已改为 Electron）与 `.mqsprofile` 导入导出在 v0.2 完成。
 5. 多进程/多 profile 并发未做；单 profile 单进程是硬约束。
 
 ---
@@ -284,12 +284,12 @@ v0.1 已落地并通过验收：
 
 | 项 | 结果 |
 |---|---|
-| 测试 | `pytest` 54 项全绿（契约/鉴权/网关/消息/限流/媒体/场景/CLI/webhook） |
+| 测试 | `pytest` 81 项全绿（契约/鉴权/网关/消息/限流/媒体/频道/场景/CLI/模糊测试） |
 | 真实 SDK | botpy（qq-botpy）echo bot 全链路通过：登录 → 网关鉴权 → 心跳 → 群 @ 收消息 → 被动回复 |
 | 契约 | 23 条端点：12 已实现（9 full + 3 partial），11 stub；`mqs contract export` 生成 `docs/COVERAGE.md` 与 `web/src/types/api.ts` |
 | GUI | Vue 3 四页（状态/配置/聊天/调试器）已构建并由控制 API 托管，Firefox 实测无 console error |
 | CLI/MCP | 全部命令可跑；MCP 10 个工具注册成功；场景 JUnit/TAP 可用 |
-| 分发 | `pip install -e .` + `mqs serve`；未做 Tauri/桌面端 |
+| 分发 | `pip install -e .` + `mqs serve`；Electron 桌面端与 AppImage 已完成（v0.2） |
 
 ### 实施中新增/微调的决定
 
@@ -308,4 +308,85 @@ v0.1 已落地并通过验收：
 2. 错误码真机校正（集中表已就位）；
 3. Webhook 与真机签名细节对齐、失败重试可视化；
 4. `.mqsprofile` 的**进程内恢复**（当前只支持导出 + 离线导入）；
-5. Tauri 桌面端、`uvx` 一键运行、多 profile 并发。
+5. Electron 桌面端已完成；`uvx` 一键运行、多 profile 并发仍未做。
+
+---
+
+## 12. v0.2 变更（2026-11-07 第二轮）
+
+这一轮按"把文档规定的内容做完"继续推进，主要变化：
+
+### 12.1 频率与时效严格对齐官方文档
+
+来源：QQ 机器人文档 v2 → 消息收发概述 → **频率与时效规则**（2026-11-07 抓取原文）。
+
+| 类型 | 场景 | 规则 |
+|---|---|---|
+| 被动 | 单聊 | **60 分钟 / 每条消息 4 次回复** |
+| 被动 | 群聊 | **5 分钟 / 每条消息 5 次回复** |
+| 被动 | 频道 | 5 分钟 |
+| 主动 | 单聊（未认证） | Bot 5/s **且** 30/min；单关系 20/min；1000/天/用户 |
+| 主动 | 单聊（个人/企业认证） | Bot 10/s；单关系 20/min；1000/天/用户 |
+| 主动 | 群聊（未认证） | Bot 30/min；单关系 20/min；1000/天/群 |
+| 主动 | 群聊（个人/企业认证） | Bot 60/min；单关系 20/min；1000/天/群 |
+| 频道 | 所有消息 | 每子频道 5/s；主动默认 20/天/频道、2 个频道/天 |
+
+**个人认证与企业认证限额完全一致，已合并为 `certified`**。因此 UI 只有三档：
+`off`（关）/ `unverified`（未认证个人）/ `certified`（已认证，个人=企业）。
+
+实现要点：
+- 用**滑动窗口**而不是令牌桶（令牌桶会跨窗口边界漏放，与"每秒最多 N 条"不符）；
+- 主动消息才计入配额，被动回复只看窗口/次数（官方也没有把被动算进主动频控）；
+- 429 返回 `Retry-After` 与 `X-RateLimit-*`；
+- 每日 1000 条持久化在 `active_quota`，跨重启有效。
+
+### 12.2 L2 频道家族从 stub 升级为实现
+
+新增 `guilds / channels / guild_members / guild_roles` 四张表（schema v2），默认 profile 自动创建
+“QSandbox 测试频道”（2 个文字频道 + 1 个语音频道 + 全体成员/管理员角色）。
+
+- REST：`/users/@me/guilds`、`/guilds/{id}`、`/guilds/{id}/channels|members|members/{uid}|roles`、
+  `/channels/{id}`、`/channels/{id}/messages`（GET/POST）、`/channels/{id}/messages/{msg_id}`
+- 网关：`MESSAGE_CREATE`（intent 1<<9）与 `AT_MESSAGE_CREATE`（intent 1<<30）
+- 频道消息：5/s/频道、主动 20/天/频道、2 频道/天、被动 5 分钟
+- 覆盖率：**23 条中 22 已实现**（19 full + 3 partial），仅 `/users/@me/dms` 保持 stub
+
+### 12.3 桌面端（Electron）
+
+- `desktop/src/main.ts` 启动 MQS sidecar（`build-sidecar/mqs`，PyInstaller onefile），读 stdout
+  JSON 握手，再用同一份 Vue 前端加载 GUI；退出时回收 sidecar（含 3.5s 兜底与 `os._exit` 清理）。
+- 已构建并实测 `QSandbox-0.1.0-x86_64.AppImage`（142 MB），Xvfb 下启动、加载、截图、退出正常。
+- Windows/macOS 由 `.github/workflows/desktop.yml` matrix 构建。
+- sidecar 用 PyInstaller（文档原定 Nuitka）；替换 `tools/build_sidecar.py` 即可切回 Nuitka。
+
+### 12.4 GUI 修正
+
+- 品牌统一为 **QSandbox**（窗口标题、侧栏、桌面产品名、默认 Bot/群/频道名）。
+- **默认只有一个可操作账号**（1 个 human + 3 个 npc；账号切换列表只列 human）。
+- **私聊 Bot 移入会话列表**（左栏“私聊 BOT”区），右栏只保留账号/成员/Bot 管理。
+- 新增**设置面板**（右上角 ⚙）：主题（auto/dark/light）、语言、日志级别、遥测（默认关）、
+  开机自启（桌面版）、虚拟时钟、profile 路径/端口、导出 profile、IP 白名单编辑器。
+- 配置页新增**规则引擎**页签（事件 → 条件 → 用户回复 + 延迟）、批量“加 3 个管理员”、
+  随机 Bot 能力集、Bot 能力集编辑。
+- 调试器新增“只看错误”“隐藏心跳”，状态页新增事件吞吐（/min）。
+
+### 12.5 其它
+
+- 场景模板：新增 `quote`（@/引用）、`permission`（权限不足）、`group_multi`（群聊多用户）、
+  `media`（multipart 上传 + msg_type=7），共 10 个；`http` 步骤支持 multipart 与 `payload_contains`。
+- 模糊测试：畸形 JSON/类型/网关帧必须返回 QQ 错误码或 4002/4010，不得 500。
+- IP 白名单中间件（`feature.whitelist` + `whitelist_ips`）落地。
+- `profiles.json` 全局索引 + `mqs profile list`。
+- 测试：**81 项全绿**；`ruff check` 干净。
+
+### 12.6 仍未完成（诚实清单）
+
+| 项 | 状态 |
+|---|---|
+| 系统钥匙串存 Bot secret / 控制 token（`--insecure-store`） | 未做，secret 仍在 SQLite；文档 §8 的安全增强 |
+| `--record` 保存可重放 fixture、`--script x.ts/x.py` 逃生口 | 未做 |
+| 分片上传预处理（`file_type` 大文件） | 未做，只支持整文件上传 |
+| Koishi / NoneBot / qq-bot-sdk 兼容矩阵 | 只实测 botpy；CI 里有 botpy job |
+| 频道权限位（角色 → 细粒度 permissions） | 角色结构有了，权限判定未做 |
+| Nuitka sidecar | 用 PyInstaller 替代 |
+| Tauri 桌面壳 | 按用户决定改为 Electron |

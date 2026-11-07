@@ -1,0 +1,86 @@
+name: c2c_passive
+description: 单聊被动回复窗口 60 分钟 / 每条 4 次（官方频率与时效规则）
+setup:
+  settings:
+    rate_mode: "off"
+    require_online: false
+  bots:
+    - app_id: "10001"
+      name: MQS Offline Bot
+      scopes: [group_message, c2c_message, media]
+  users:
+    - alias: alice
+      name: 私聊窗口测试用户
+steps:
+  - send:
+      as: alice
+      to: "dm:10001:{{alice}}"
+      text: c2c-window
+  - http:
+      bot: "10001"
+      method: POST
+      target: user
+      user: alice
+      path: /v2/users/{openid}/messages
+      json:
+        content: reply-1
+        msg_id: "{{incoming_msg_id}}"
+        msg_seq: 1
+      expect_status: 200
+  - http:
+      bot: "10001"
+      method: POST
+      target: user
+      user: alice
+      path: /v2/users/{openid}/messages
+      json:
+        content: reply-2
+        msg_id: "{{incoming_msg_id}}"
+        msg_seq: 2
+      expect_status: 200
+  - http:
+      bot: "10001"
+      method: POST
+      target: user
+      user: alice
+      path: /v2/users/{openid}/messages
+      json:
+        content: reply-3
+        msg_id: "{{incoming_msg_id}}"
+        msg_seq: 3
+      expect_status: 200
+  - http:
+      bot: "10001"
+      method: POST
+      target: user
+      user: alice
+      path: /v2/users/{openid}/messages
+      json:
+        content: reply-4
+        msg_id: "{{incoming_msg_id}}"
+        msg_seq: 4
+      expect_status: 200
+  - http:
+      bot: "10001"
+      method: POST
+      target: user
+      user: alice
+      path: /v2/users/{openid}/messages
+      json:
+        content: reply-5
+        msg_id: "{{incoming_msg_id}}"
+      expect_status: 400
+      expect_code: 40057
+  - advance: 61m
+  - http:
+      bot: "10001"
+      method: POST
+      target: user
+      user: alice
+      path: /v2/users/{openid}/messages
+      json:
+        content: too-late
+        msg_id: "{{incoming_msg_id}}"
+        msg_seq: 9
+      expect_status: 400
+      expect_code: 40057

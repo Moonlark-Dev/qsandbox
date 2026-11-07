@@ -339,6 +339,61 @@ async def remove_bot_from_group(group_id: str, bot_id: str, request: Request) ->
 
 
 # ---------------------------------------------------------------------------
+# guilds (L2 debug / test surface)
+# -----------------------------------------------------------------------------
+
+@router.get("/guilds")
+async def control_list_guilds(request: Request) -> list[dict]:
+    return await get_world(request).list_guilds()
+
+
+@router.post("/guilds")
+async def control_create_guild(request: Request) -> dict:
+    world: World = get_world(request)
+    body = await request.json()
+    return await world.create_guild(name=body.get("name"), owner_id=body.get("owner_id"))
+
+
+@router.get("/guilds/{guild_id}")
+async def control_get_guild(guild_id: str, request: Request) -> dict:
+    return await get_world(request).get_guild(guild_id)
+
+
+@router.get("/guilds/{guild_id}/channels")
+async def control_guild_channels(guild_id: str, request: Request) -> list[dict]:
+    return await get_world(request).list_channels(guild_id)
+
+
+@router.get("/guilds/{guild_id}/members")
+async def control_guild_members(guild_id: str, request: Request) -> list[dict]:
+    return await get_world(request).list_guild_members(guild_id)
+
+
+@router.get("/guilds/{guild_id}/roles")
+async def control_guild_roles(guild_id: str, request: Request) -> list[dict]:
+    return await get_world(request).list_guild_roles(guild_id)
+
+
+@router.post("/channels/{channel_id}/messages")
+async def control_channel_send(channel_id: str, request: Request) -> dict:
+    world: World = get_world(request)
+    body = await request.json()
+    user_id = body.get("as_user")
+    if not user_id:
+        raise InvalidParam("as_user is required")
+    return await world.send_as_user_to_channel(
+        channel_id, user_id, body.get("content") or "", mentions=body.get("mentions")
+    )
+
+
+@router.get("/channels/{channel_id}/messages")
+async def control_channel_messages(channel_id: str, request: Request, limit: int = 50) -> dict:
+    world: World = get_world(request)
+    messages = await world.list_messages(f"channel:{channel_id}", limit=limit)
+    return {"items": messages}
+
+
+# ---------------------------------------------------------------------------
 # bots
 # ---------------------------------------------------------------------------
 
@@ -357,6 +412,7 @@ async def create_bot(payload: BotCreate, request: Request) -> dict:
         avatar=payload.avatar,
         scopes=payload.scopes,
         delivery=payload.delivery,
+        random=payload.random,
     )
 
 

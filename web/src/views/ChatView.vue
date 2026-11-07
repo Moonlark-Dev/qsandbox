@@ -40,6 +40,9 @@ const groupBots = computed(() => {
   return state.bots.filter((bot) => activeGroup.value.bot_ids.includes(bot.id))
 })
 const currentUser = computed(() => state.users.find((u) => u.id === currentUserId.value))
+const visibleConversations = computed(() =>
+  state.conversations.filter((c) => !(c.type === 'dm' && c.user_id === currentUserId.value)),
+)
 const isMember = computed(() => {
   if (dmTarget.value) return true
   const conv = activeConversation.value
@@ -295,7 +298,7 @@ function isImage(att: any): boolean {
         <button class="btn small" @click="refreshWorld">↻</button>
       </div>
       <div
-        v-for="conv in state.conversations"
+        v-for="conv in visibleConversations"
         :key="conv.id"
         class="conv-item"
         :class="{ active: !dmTarget && currentId === conv.id }"
@@ -308,7 +311,22 @@ function isImage(att: any): boolean {
         </div>
         <span v-if="conv.type === 'group'" class="tag">{{ conv.member_count }}</span>
       </div>
-      <div v-if="!state.conversations.length" class="empty">还没有会话<br />点上方新建群</div>
+      <div class="panel-section-title" style="padding: 14px 6px 4px">私聊 Bot</div>
+      <div
+        v-for="bot in state.bots"
+        :key="`dm-${bot.id}`"
+        class="conv-item"
+        :class="{ active: dmTarget === bot.id }"
+        @click="startDm(bot.id)"
+      >
+        <img class="avatar" :src="bot.avatar" alt="" />
+        <div class="grow">
+          <div class="conv-name">私聊 · {{ bot.name }}</div>
+          <div class="conv-preview">{{ bot.online ? '在线' : '离线' }}</div>
+        </div>
+        <span class="tag" :class="bot.online ? 'ok' : ''">{{ bot.online ? '在线' : '离线' }}</span>
+      </div>
+      <div v-if="!visibleConversations.length && !state.bots.length" class="empty">还没有会话<br />点上方新建群</div>
     </aside>
 
     <section class="chat-main">
@@ -405,15 +423,6 @@ function isImage(att: any): boolean {
           <span class="faint small" v-if="index < 9">Ctrl+{{ index + 1 }}</span>
         </div>
         <div v-if="!humanUsers.length" class="small faint">没有可操作账号</div>
-      </div>
-
-      <div>
-        <div class="panel-section-title">私聊 Bot</div>
-        <div v-for="bot in state.bots" :key="bot.id" class="account-item" @click="startDm(bot.id)">
-          <img class="avatar sm" :src="bot.avatar" alt="" />
-          <span class="grow">{{ bot.name }}</span>
-          <span class="tag" :class="bot.online ? 'ok' : ''">{{ bot.online ? '在线' : '离线' }}</span>
-        </div>
       </div>
 
       <div v-if="activeGroup">

@@ -1,8 +1,8 @@
 name: rate_limit
-description: strict 档令牌桶：连续回复第 3 次应 429，且带 retry_after
+description: 未认证个人 · 单聊主动消息 5/qps：第 6 条应 429（官方频率政策）
 setup:
   settings:
-    rate_mode: "strict"
+    rate_mode: "unverified"
     require_online: false
   bots:
     - app_id: "10001"
@@ -11,46 +11,53 @@ setup:
   users:
     - alias: alice
       name: 限流测试用户
-  groups:
-    - alias: room
-      name: 限流测试群
-      owner: alice
-      members: [alice]
-      bots: ["10001"]
 steps:
-  - send:
-      as: alice
-      to: room
-      text: rate-ping
-      at_bots: ["10001"]
   - http:
       bot: "10001"
       method: POST
-      target: group
-      group: room
-      path: /v2/groups/{openid}/messages
-      json:
-        content: reply-1
-        msg_id: "{{incoming_msg_id}}"
+      target: user
+      user: alice
+      path: /v2/users/{openid}/messages
+      json: {content: active-1}
       expect_status: 200
   - http:
       bot: "10001"
       method: POST
-      target: group
-      group: room
-      path: /v2/groups/{openid}/messages
-      json:
-        content: reply-2
-        msg_id: "{{incoming_msg_id}}"
+      target: user
+      user: alice
+      path: /v2/users/{openid}/messages
+      json: {content: active-2}
       expect_status: 200
   - http:
       bot: "10001"
       method: POST
-      target: group
-      group: room
-      path: /v2/groups/{openid}/messages
-      json:
-        content: reply-3
-        msg_id: "{{incoming_msg_id}}"
+      target: user
+      user: alice
+      path: /v2/users/{openid}/messages
+      json: {content: active-3}
+      expect_status: 200
+  - http:
+      bot: "10001"
+      method: POST
+      target: user
+      user: alice
+      path: /v2/users/{openid}/messages
+      json: {content: active-4}
+      expect_status: 200
+  - http:
+      bot: "10001"
+      method: POST
+      target: user
+      user: alice
+      path: /v2/users/{openid}/messages
+      json: {content: active-5}
+      expect_status: 200
+  - http:
+      bot: "10001"
+      method: POST
+      target: user
+      user: alice
+      path: /v2/users/{openid}/messages
+      json: {content: active-6}
       expect_status: 429
       expect_code: 42900

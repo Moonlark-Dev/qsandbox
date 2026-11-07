@@ -11,6 +11,7 @@ export interface Status {
   max_event_seq: number
   max_message_id: number
   max_frame_id: number
+  events_last_minute: number
   rate: { mode: string; buckets: number; allowed: number; rejected: number }
   gateway: { connections: number; sessions: number; bots: string[]; shards: any[] }
   db_size: number

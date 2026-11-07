@@ -14,6 +14,12 @@ profiles/
 *.sqlite-shm
 web/dist/
 web/node_modules/
+desktop/node_modules/
+desktop/dist/
+desktop/release/
+build-sidecar/
+build/
+*.spec
 .env
 .DS_Store
 

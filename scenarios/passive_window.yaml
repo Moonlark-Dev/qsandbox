@@ -4,7 +4,8 @@ setup:
   settings:
     rate_mode: "off"
     require_online: false
-    passive_window_ms: 300000
+    passive_window_group_ms: 300000
+    passive_reply_limit_group: 5
   bots:
     - app_id: "10001"
       name: MQS Offline Bot

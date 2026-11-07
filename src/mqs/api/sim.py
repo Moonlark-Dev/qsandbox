@@ -14,7 +14,14 @@ from ..domain.world import World
 from ..errors import InvalidParam
 from ..ids import avatar_svg, new_msg_id
 from ..models import AppAccessTokenRequest, MediaUploadRequest, MessageSendRequest
-from .common import SimLogMiddleware, TraceMiddleware, get_world, install_error_handlers, require_bot
+from .common import (
+    IPWhitelistMiddleware,
+    SimLogMiddleware,
+    TraceMiddleware,
+    get_world,
+    install_error_handlers,
+    require_bot,
+)
 
 router = APIRouter()
 
@@ -63,8 +70,30 @@ async def bot_me(bot: dict = Depends(require_bot)) -> dict:
 
 
 @router.get("/users/@me/guilds")
-async def bot_guilds(bot: dict = Depends(require_bot)) -> list:
-    return []
+async def bot_guilds(request: Request, bot: dict = Depends(require_bot)) -> list:
+    world: World = get_world(request)
+    guilds = await world.list_guilds(bot_id=bot["id"])
+    return [
+        {
+            "id": g["id"],
+            "name": g["name"],
+            "icon": g["icon"],
+            "owner_id": g["owner_id"],
+            "member_count": g["member_count"],
+        }
+        for g in guilds
+    ]
+
+
+async def _require_guild_member(world: World, bot_id: str, guild_id: str) -> None:
+    from ..errors import NoPermission
+
+    row = await world.db.fetchone(
+        "SELECT 1 FROM guild_members WHERE guild_id=? AND user_id=? AND member_type='bot'",
+        (guild_id, bot_id),
+    )
+    if row is None:
+        raise NoPermission("bot is not a member of this guild")
 
 
 @router.post("/users/@me/dms")
@@ -72,21 +101,35 @@ async def create_dm(bot: dict = Depends(require_bot)) -> dict:
     return {"guild_id": "mqs-stub-guild", "channel_id": new_msg_id("MQS_DM"), "create_time": 0}
 
 
+def _attach_rate_headers(response: Response, result: dict) -> dict:
+    info = result.pop("_rate", None)
+    if info:
+        response.headers["X-RateLimit-Limit"] = str(info["limit"])
+        response.headers["X-RateLimit-Remaining"] = str(max(0, info["remaining"]))
+        response.headers["X-RateLimit-Reset"] = f"{info['reset_after']:.2f}"
+    return result
+
+
 # ---------------------------------------------------------------------------
-# group messages
+# group / c2c messages
 # ---------------------------------------------------------------------------
 
 @router.post("/v2/groups/{group_openid}/messages")
 async def send_group_message(
-    group_openid: str, payload: MessageSendRequest, request: Request, bot: dict = Depends(require_bot)
+    group_openid: str,
+    payload: MessageSendRequest,
+    request: Request,
+    response: Response,
+    bot: dict = Depends(require_bot),
 ) -> dict:
     world: World = get_world(request)
-    return await world.send_as_bot(
+    result = await world.send_as_bot(
         bot["id"],
         target_kind="group",
         target_openid=group_openid,
         body=payload.model_dump(exclude_none=True),
     )
+    return _attach_rate_headers(response, result)
 
 
 @router.delete("/v2/groups/{group_openid}/messages/{message_id}")
@@ -99,14 +142,21 @@ async def delete_group_message(
 
 
 @router.post("/v2/users/{openid}/messages")
-async def send_c2c_message(openid: str, payload: MessageSendRequest, request: Request, bot: dict = Depends(require_bot)) -> dict:
+async def send_c2c_message(
+    openid: str,
+    payload: MessageSendRequest,
+    request: Request,
+    response: Response,
+    bot: dict = Depends(require_bot),
+) -> dict:
     world: World = get_world(request)
-    return await world.send_as_bot(
+    result = await world.send_as_bot(
         bot["id"],
         target_kind="user",
         target_openid=openid,
         body=payload.model_dump(exclude_none=True),
     )
+    return _attach_rate_headers(response, result)
 
 
 @router.delete("/v2/users/{openid}/messages/{message_id}")
@@ -122,7 +172,7 @@ async def delete_c2c_message(openid: str, message_id: str, request: Request, bot
 
 def _check_file_type(file_type: int) -> int:
     if file_type == 4:
-        raise InvalidParam("file_type 4 (generic file) is not supported in MQS v0.1")
+        raise InvalidParam("file_type 4 (generic file) is not supported in QSandbox v0.1")
     if file_type not in FILE_LIMITS:
         raise InvalidParam(f"invalid file_type: {file_type}")
     return FILE_LIMITS[file_type]
@@ -178,6 +228,7 @@ async def _upload(request: Request, *, kind: str, target_openid: str, bot: dict)
             target_openid=target_openid,
             body={"msg_type": 7, "content": "", "media": {"file_info": result["file_info"]}},
         )
+        sent.pop("_rate", None)
         result["message"] = sent
     return result
 
@@ -234,10 +285,6 @@ async def download_media(hash: str, request: Request) -> Response:
     return FileResponse(resolved, media_type=media["mime"], filename=hash[:12])
 
 
-# ---------------------------------------------------------------------------
-# avatars (generated locally, no external assets)
-# ---------------------------------------------------------------------------
-
 @router.get("/avatars/{key}.svg")
 async def avatar(key: str) -> Response:
     if not AVATAR_RE.match(key):
@@ -245,53 +292,163 @@ async def avatar(key: str) -> Response:
     return Response(content=avatar_svg(key), media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=3600"})
 
 
-# ---------------------------------------------------------------------------
-# stub guild family (L2) — structure only
-# ---------------------------------------------------------------------------
-
 @router.get("/guilds/{guild_id}")
-async def stub_guild(guild_id: str, bot: dict = Depends(require_bot)) -> dict:
-    return {"id": guild_id, "name": "MQS Stub Guild", "icon": "", "owner_id": "1", "member_count": 0, "description": ""}
+async def guild_get(guild_id: str, request: Request, bot: dict = Depends(require_bot)) -> dict:
+    world: World = get_world(request)
+    await _require_guild_member(world, bot["id"], guild_id)
+    guild = await world.get_guild(guild_id)
+    return {
+        "id": guild["id"],
+        "name": guild["name"],
+        "icon": guild["icon"],
+        "owner_id": guild["owner_id"],
+        "member_count": guild["member_count"],
+        "description": "",
+    }
 
 
 @router.get("/guilds/{guild_id}/channels")
-async def stub_channels(guild_id: str, bot: dict = Depends(require_bot)) -> list:
-    return []
+async def guild_channels(guild_id: str, request: Request, bot: dict = Depends(require_bot)) -> list:
+    world: World = get_world(request)
+    await _require_guild_member(world, bot["id"], guild_id)
+    return [
+        {
+            "id": c["id"],
+            "guild_id": c["guild_id"],
+            "name": c["name"],
+            "type": c["type"],
+            "position": c["position"],
+            "owner_id": None,
+        }
+        for c in await world.list_channels(guild_id)
+    ]
 
 
 @router.get("/guilds/{guild_id}/members")
-async def stub_members(guild_id: str, bot: dict = Depends(require_bot)) -> list:
-    return []
+async def guild_members(
+    guild_id: str, request: Request, bot: dict = Depends(require_bot), limit: int = 100, after: str | None = None
+) -> list:
+    world: World = get_world(request)
+    await _require_guild_member(world, bot["id"], guild_id)
+    return [
+        {
+            "user": {"id": m["user_id"], "username": m["nickname"], "bot": m["member_type"] == "bot"},
+            "nick": m["nickname"],
+            "roles": m["roles"],
+            "joined_at": m["joined_at"],
+        }
+        for m in await world.list_guild_members(guild_id, limit=limit, after=after)
+    ]
 
 
 @router.get("/guilds/{guild_id}/members/{user_id}")
-async def stub_member(guild_id: str, user_id: str, bot: dict = Depends(require_bot)) -> dict:
-    return {"user": {"id": user_id, "username": "stub", "bot": False}, "roles": [], "joined_at": "2026-01-01T00:00:00+08:00"}
+async def guild_member(guild_id: str, user_id: str, request: Request, bot: dict = Depends(require_bot)) -> dict:
+    world: World = get_world(request)
+    await _require_guild_member(world, bot["id"], guild_id)
+    m = await world.get_guild_member(guild_id, user_id)
+    return {
+        "user": {"id": m["user_id"], "username": m["nickname"], "bot": m["member_type"] == "bot"},
+        "nick": m["nickname"],
+        "roles": m["roles"],
+        "joined_at": m["joined_at"],
+    }
 
 
 @router.get("/guilds/{guild_id}/roles")
-async def stub_roles(guild_id: str, bot: dict = Depends(require_bot)) -> dict:
-    return {"roles": [], "role_members": [], "role_members_num": 0}
+async def guild_roles(guild_id: str, request: Request, bot: dict = Depends(require_bot)) -> dict:
+    world: World = get_world(request)
+    await _require_guild_member(world, bot["id"], guild_id)
+    roles = await world.list_guild_roles(guild_id)
+    return {
+        "roles": [
+            {
+                "id": role["id"],
+                "name": role["name"],
+                "color": role["color"],
+                "hoist": role["hoist"],
+                "permissions": role["permissions"],
+            }
+            for role in roles
+        ],
+        "role_members": [],
+        "role_members_num": 0,
+    }
 
 
 @router.get("/channels/{channel_id}")
-async def stub_channel(channel_id: str, bot: dict = Depends(require_bot)) -> dict:
-    return {"id": channel_id, "name": "stub", "type": 0, "guild_id": "mqs-stub-guild", "position": 0}
+async def channel_get(channel_id: str, request: Request, bot: dict = Depends(require_bot)) -> dict:
+    world: World = get_world(request)
+    channel = await world.get_channel(channel_id)
+    await _require_guild_member(world, bot["id"], channel["guild_id"])
+    return {
+        "id": channel["id"],
+        "guild_id": channel["guild_id"],
+        "name": channel["name"],
+        "type": channel["type"],
+        "position": channel["position"],
+        "owner_id": None,
+    }
 
 
 @router.get("/channels/{channel_id}/messages")
-async def stub_channel_messages(channel_id: str, bot: dict = Depends(require_bot)) -> list:
-    return []
+async def channel_messages(
+    channel_id: str, request: Request, bot: dict = Depends(require_bot), limit: int = 50, before_seq: int | None = None
+) -> list:
+    world: World = get_world(request)
+    channel = await world.get_channel(channel_id)
+    await _require_guild_member(world, bot["id"], channel["guild_id"])
+    messages = await world.list_messages(f"channel:{channel_id}", limit=limit, before_seq=before_seq)
+    return [_channel_message_payload(m, channel) for m in messages]
+
+
+def _channel_message_payload(message: dict, channel: dict) -> dict:
+    return {
+        "id": message["msg_id"],
+        "content": message["content"],
+        "channel_id": channel["id"],
+        "guild_id": channel["guild_id"],
+        "author": {
+            "id": message["sender_id"],
+            "username": (message.get("sender") or {}).get("name") or message["sender_id"],
+            "bot": message["sender_type"] == "bot",
+        },
+        "timestamp": message["raw"].get("timestamp", ""),
+        "mentions": [],
+        "attachments": message.get("attachments") or [],
+    }
 
 
 @router.get("/channels/{channel_id}/messages/{message_id}")
-async def stub_channel_message(channel_id: str, message_id: str, bot: dict = Depends(require_bot)) -> dict:
-    return {"id": message_id, "channel_id": channel_id, "content": "", "timestamp": "2026-01-01T00:00:00+08:00"}
+async def channel_message_get(
+    channel_id: str, message_id: str, request: Request, bot: dict = Depends(require_bot)
+) -> dict:
+    world: World = get_world(request)
+    channel = await world.get_channel(channel_id)
+    await _require_guild_member(world, bot["id"], channel["guild_id"])
+    row = await world.db.fetchone(
+        "SELECT * FROM messages WHERE msg_id=? AND conversation_id=?", (message_id, f"channel:{channel_id}")
+    )
+    if row is None:
+        from ..errors import MessageNotFound
+
+        raise MessageNotFound("channel message not found")
+    message = await world.message_out(row)
+    return _channel_message_payload(message, channel)
 
 
 @router.post("/channels/{channel_id}/messages")
-async def stub_channel_send(channel_id: str, request: Request, bot: dict = Depends(require_bot)) -> dict:
-    return {"id": new_msg_id(), "channel_id": channel_id, "timestamp": "2026-01-01T00:00:00+08:00"}
+async def channel_send(
+    channel_id: str,
+    payload: MessageSendRequest,
+    request: Request,
+    response: Response,
+    bot: dict = Depends(require_bot),
+) -> dict:
+    world: World = get_world(request)
+    result = await world.send_channel_message(
+        bot["id"], channel_id, payload.model_dump(exclude_none=True)
+    )
+    return _attach_rate_headers(response, result)
 
 
 # ---------------------------------------------------------------------------
@@ -324,7 +481,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
 def create_sim_app(world: World, config: ProcessConfig) -> FastAPI:
     app = FastAPI(
-        title="MQS Simulate API",
+        title="QSandbox Simulate API",
         description="QQ Bot API v2 sandbox — not affiliated with Tencent",
         version="0.1.0",
         docs_url="/docs" if config.expose_docs else None,
@@ -335,6 +492,7 @@ def create_sim_app(world: World, config: ProcessConfig) -> FastAPI:
     app.state.config = config
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
     app.add_middleware(SimLogMiddleware)
+    app.add_middleware(IPWhitelistMiddleware)
     app.add_middleware(TraceMiddleware)
     install_error_handlers(app)
     app.include_router(router)

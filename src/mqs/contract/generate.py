@@ -54,7 +54,7 @@ CONTROL_MODELS = [
 def coverage_markdown() -> str:
     data = summary()
     lines = [
-        "# MQS 接口覆盖率",
+        "# QSandbox 接口覆盖率",
         "",
         f"> 自动生成 · 文档快照 {__import__('mqs.contract.registry', fromlist=['DOC_DATE']).DOC_DATE} · 请勿手改",
         "",

@@ -1,0 +1,30 @@
+name: quote
+description: 回复引用：第二条消息带 message_reference，事件 payload 中可见
+setup:
+  settings:
+    rate_mode: "off"
+  users:
+    - alias: alice
+      name: 引用测试用户
+  groups:
+    - alias: room
+      name: 引用测试群
+      owner: alice
+      members: [alice]
+      bots: ["10000"]
+steps:
+  - send:
+      as: alice
+      to: room
+      text: 第一条
+  - send:
+      as: alice
+      to: room
+      text: 引用第一条
+      reply_to: "{{last_message_id}}"
+  - expect_event:
+      type: GROUP_AT_MESSAGE_CREATE
+      conversation: "group:{{room}}"
+      content_contains: 引用第一条
+      payload_contains: message_reference
+      timeout: 3s

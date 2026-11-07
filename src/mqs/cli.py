@@ -29,7 +29,7 @@ from .config import (
 )
 from .contract import coverage_markdown, typescript
 
-app = typer.Typer(add_completion=False, no_args_is_help=True, help="MQS — QQ Bot API v2 sandbox")
+app = typer.Typer(add_completion=False, no_args_is_help=True, help="QSandbox — QQ Bot API v2 sandbox")
 user_app = typer.Typer(no_args_is_help=True, help="虚拟用户")
 group_app = typer.Typer(no_args_is_help=True, help="群")
 bot_app = typer.Typer(no_args_is_help=True, help="Bot")
@@ -341,6 +341,7 @@ def bot_create(
     name: Annotated[str, typer.Option("--name")] = "",
     secret: Annotated[str, typer.Option("--secret")] = "",
     delivery: Annotated[str, typer.Option("--delivery")] = "ws",
+    random: Annotated[bool, typer.Option("--random", help="随机名称与能力集")] = False,
     profile: ProfileOpt = DEFAULT_PROFILE,
     home: HomeOpt = "",
     as_json: JsonOpt = False,
@@ -348,7 +349,13 @@ def bot_create(
     """创建 Bot。"""
     data = Client(home, profile).post(
         "/_mqs/bots",
-        json={"app_id": app_id or None, "name": name or None, "secret": secret or None, "delivery": delivery},
+        json={
+            "app_id": app_id or None,
+            "name": name or None,
+            "secret": secret or None,
+            "delivery": delivery,
+            "random": random,
+        },
     )
     _emit(data, as_json) if as_json else typer.echo(f"created bot {data['app_id']} secret={data['secret']}")
 
@@ -644,6 +651,27 @@ def contract_export(
     else:
         typer.echo(f"wrote {out_path} and {types_path}")
         typer.echo(summary()["ascii"])
+
+
+@profile_app.command("list")
+def profile_list(home: HomeOpt = "", as_json: JsonOpt = False) -> None:
+    """列出本机 profile（读 profiles.json 索引）。"""
+    home_path = resolve_home(home or None)
+    index_path = home_path / "profiles.json"
+    entries: list[dict] = []
+    try:
+        data = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else {}
+        entries = list((data.get("profiles") or {}).values())
+    except (OSError, ValueError):
+        entries = []
+    if not entries and (home_path / "profiles").exists():
+        for directory in sorted((home_path / "profiles").iterdir()):
+            if directory.is_dir():
+                entries.append({"name": directory.name, "path": str(directory)})
+    if as_json:
+        _emit(entries, True)
+    else:
+        _table(["name", "path", "last_opened"], [[e.get("name"), e.get("path"), e.get("last_opened_at", "")] for e in entries])
 
 
 @profile_app.command("export")

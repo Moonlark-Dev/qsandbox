@@ -14,6 +14,7 @@ const selected = ref<any>(null)
 const events = ref<any[]>([])
 const autoScroll = ref(true)
 const hideHeartbeat = ref(true)
+const errorsOnly = ref(false)
 
 let offFrame: (() => void) | undefined
 let offEvent: (() => void) | undefined
@@ -27,6 +28,11 @@ const filteredFrames = computed(() => {
     if (kind.value && frame.kind !== kind.value) return false
     if (botId.value && frame.bot_id !== botId.value) return false
     if (hideHeartbeat.value && /op=1\b/.test(frame.summary || '')) return false
+    if (errorsOnly.value) {
+      const status = frame.data?.status
+      const isError = (typeof status === 'number' && status >= 400) || /error|timeout|rejected|429|40040/i.test(frame.summary || '')
+      if (!isError) return false
+    }
     if (q && !(frame.summary || '').toLowerCase().includes(q) && !JSON.stringify(frame.data || {}).toLowerCase().includes(q)) return false
     return true
   })
@@ -150,6 +156,9 @@ function markClass(frame: any): string {
         <div class="spacer"></div>
         <label class="switch small">
           <input v-model="hideHeartbeat" type="checkbox" /><span class="track"><span class="thumb"></span></span> 隐藏心跳
+        </label>
+        <label class="switch small">
+          <input v-model="errorsOnly" type="checkbox" /><span class="track"><span class="thumb"></span></span> 只看错误
         </label>
         <label class="switch small">
           <input v-model="paused" type="checkbox" /><span class="track"><span class="thumb"></span></span> 暂停

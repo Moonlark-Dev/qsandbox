@@ -1,0 +1,29 @@
+name: permission
+description: 权限不足：没有 group_message 能力的 Bot 发群消息应 403/40040
+setup:
+  settings:
+    rate_mode: "off"
+    require_online: false
+  bots:
+    - app_id: "10002"
+      name: 只读 Bot
+      scopes: [c2c_message]
+  users:
+    - alias: alice
+      name: 权限测试用户
+  groups:
+    - alias: room
+      name: 权限测试群
+      owner: alice
+      members: [alice]
+      bots: ["10002"]
+steps:
+  - http:
+      bot: "10002"
+      method: POST
+      target: group
+      group: room
+      path: /v2/groups/{openid}/messages
+      json: {content: should-fail}
+      expect_status: 403
+      expect_code: 40040

@@ -1,5 +1,6 @@
 """Scenario engine: builtin templates, JUnit output, assertion failures."""
 
+import pytest
 import yaml
 
 from mqs.scenario import BUILTINS, builtin_scenarios
@@ -65,4 +66,10 @@ async def test_passive_window_template_without_bot(mqs) -> None:
     result = await run_scenario_payload(
         mqs.world, BUILTINS["passive_window"], None, sim_app=mqs.ctx["sim_app"]
     )
+    assert result.ok, [step.as_dict() for step in result.steps]
+
+
+@pytest.mark.parametrize("name", ["quote", "group_multi", "media", "permission"])
+async def test_more_builtin_templates(mqs, name: str) -> None:
+    result = await run_scenario_payload(mqs.world, BUILTINS[name], None, sim_app=mqs.ctx["sim_app"])
     assert result.ok, [step.as_dict() for step in result.steps]

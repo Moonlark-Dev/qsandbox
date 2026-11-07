@@ -54,7 +54,20 @@ import mqs.compat.botpy   # 必须在创建 botpy.Client 之前 import
 ## 回归方式
 
 ```bash
-pytest tests/                      # 54 项，含网关/消息/限流/场景/CLI
+pytest tests/                      # 81 项，含网关/消息/限流/频道/场景/CLI/模糊测试
 MQS_BASE_URL=http://127.0.0.1:5700 python examples/botpy_echo/bot.py
 mqs script run smoke               # 需要上面这个 echo bot 在线
 ```
+
+## 2026-11-07 第二轮补充
+
+- 品牌：程序内显示 **QSandbox**（`mqs` 仍是 CLI 命令名，`MQS_`/`mqs-` 仍是假凭据前缀）。
+- 被动消息窗口按场景区分：单聊 **60 分钟 / 每条 4 次**，群聊 **5 分钟 / 每条 5 次**，
+  频道 **5 分钟**（次数不限）。
+- 主动消息频控严格按官方“频率与时效规则”：单聊未认证 5/s & 30/min、已认证 10/s；
+  群聊未认证 30/min、已认证 60/min；单关系 20/min；每日 1000/用户或群。
+  个人认证与企业认证限额一致，已合并为 `certified` 一档。
+- L2 频道家族已从 stub 升级为实现：默认 profile 带一个 “QSandbox 测试频道”，
+  支持 guild/channel/member/role 查询、频道消息收发的 `MESSAGE_CREATE` / `AT_MESSAGE_CREATE`。
+- 桌面端：按用户决定由 Tauri 改为 **Electron**（`desktop/`），sidecar 用 PyInstaller onefile；
+  AppImage 已在 Xvfb 下实测启动/退出。

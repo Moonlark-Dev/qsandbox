@@ -1,19 +1,23 @@
-# MQS — Moonlark QSandbox
+# QSandbox — Moonlark QSandbox
 
 > QQ Bot API v2 的本地沙箱：把 `base_url` / `ws_url` 指过来，Bot 就能跑完整收发。
-> **非官方项目，与腾讯无任何关联。** 所有账号、openid、token 都是 MQS 生成的假数据。
+> **非官方项目，与腾讯无任何关联。** 所有账号、openid、token 都是 QSandbox 生成的假数据。
 
-MQS 是给 [Moonlark](https://github.com/Moonlark-Dev/Moonlark) 生态和 QQ Bot 开发者用的"平台替身"：不需要 AppID 权限、不会触发真机频控、世界可复现、全程可观测。设计文档见 [PLAN.md](./PLAN.md)。
+QSandbox 是给 [Moonlark](https://github.com/Moonlark-Dev/Moonlark) 生态和 QQ Bot 开发者用的"平台替身"：不需要 AppID 权限、不会触发真机频控、世界可复现、全程可观测。设计文档见 [PLAN.md](./PLAN.md)。
 
 ```
-mqs serve  →  Simulate API :5700   (QQ 兼容 /v2/*、网关 WebSocket)
-           →  Control API  :5701   (GUI / CLI / MCP，token + Origin 保护)
-           →  SQLite + media       (单进程、WAL、内容哈希寻址)
+QSandbox 服务
+  →  Simulate API :5700   (QQ 兼容 /v2/*、网关 WebSocket)
+  →  Control API  :5701   (GUI / CLI / MCP，token + Origin 保护)
+  →  SQLite + media       (单进程、WAL、内容哈希寻址)
+
+Electron 桌面端（desktop/）→ 拉起 sidecar → 内嵌同一份 Vue GUI
+CLI / MCP                  → 同一个控制 API，没有第二条实现
 ```
 
 ![状态页](docs/screenshots/status.png)
 
-<sub>状态页：接入信息卡、覆盖率、profile；聊天与调试器见 [docs/screenshots](./docs/screenshots)。</sub>
+<sub>状态页：接入信息卡、覆盖率、profile；聊天/设置/调试器见 [docs/screenshots](./docs/screenshots)。</sub>
 
 ## 快速开始
 
@@ -22,11 +26,11 @@ mqs serve  →  Simulate API :5700   (QQ 兼容 /v2/*、网关 WebSocket)
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 
-# 2. 启动（首次自动建一个测试 Bot / 用户 / 群）
+# 2. 启动（首次自动建 1 个可操作账号 + 3 个 npc + 1 群 + 1 频道）
 mqs serve
 #    Simulate API : http://127.0.0.1:5700
 #    Gateway      : ws://127.0.0.1:5700/websocket
-#    Control GUI  : http://127.0.0.1:5701/#t=...   ← 浏览器打开
+#    Control GUI  : http://127.0.0.1:5701/#t=...   ← 浏览器打开（开发预览）
 ```
 
 默认测试 Bot：
@@ -36,6 +40,18 @@ mqs serve
 | appid | `10000` |
 | secret | `mqs-secret-10000` |
 | token | `POST /app/getAppAccessToken` 获取，或 `mqs token` |
+
+### 桌面端（Electron）
+
+```bash
+cd web && npm install && npm run build
+cd .. && pip install -e ".[build]" && python tools/build_sidecar.py
+cd desktop && npm install && npm run dist:linux   # release/QSandbox-*.AppImage
+# 或开发模式：npm start（自动拉起 build-sidecar/mqs）
+```
+
+桌面端会把自己的数据放到 `app.getPath('userData')/mqs-home`，不污染仓库里的 profile。
+更多见 [desktop/README.md](./desktop/README.md)。
 
 ### 把 botpy 指过来
 
@@ -53,26 +69,43 @@ import mqs.compat.botpy  # noqa: F401  ← 必须在 import botpy 之前
 mqs group create --name 测试群 --members 3
 mqs send --as-user u_000001 --to group:g_000002 --text "你好"
 mqs expect --event group_at_message_create --timeout 3s
-mqs script run smoke            # 内置场景（需要 echo bot 在线）
-mqs script run rate_limit       # 验证 strict 限流：第 3 次 429
+mqs script run smoke            # 需要 echo bot 在线
+mqs script run rate_limit       # 未认证个人单聊 5/s：第 6 条 429
+mqs script run media            # multipart 上传 + msg_type=7
 mqs status --json
 ```
 
-## 能力矩阵（v0.1）
+## 频率与时效（严格按 QQ 官方文档）
+
+| 类型 | 场景 | 规则 |
+|---|---|---|
+| 被动 | 单聊 | 60 分钟 / 每条消息 4 次回复 |
+| 被动 | 群聊 | 5 分钟 / 每条消息 5 次回复 |
+| 主动 | 单聊 · 未认证 | Bot 5/s 且 30/min；单关系 20/min；1000/天/用户 |
+| 主动 | 单聊 · 已认证 | Bot 10/s；单关系 20/min；1000/天/用户 |
+| 主动 | 群聊 · 未认证 | Bot 30/min；单关系 20/min；1000/天/群 |
+| 主动 | 群聊 · 已认证 | Bot 60/min；单关系 20/min；1000/天/群 |
+| 频道 | 所有消息 | 5/s/频道；主动 20/天/频道、2 频道/天 |
+
+个人认证与企业认证限额完全一致，UI 合并为 **关 / 未认证个人 / 已认证（个人=企业）** 三档。
+实现用滑动窗口，不是令牌桶；429 带 `Retry-After` 与 `X-RateLimit-*`。
+
+## 能力矩阵（v0.2）
 
 | 层 | 已实现 |
 |---|---|
-| 鉴权 | `getAppAccessToken`、`Authorization: QQBot <token>`、7200s 过期、token 失效/过期错误码 |
-| 网关 | hello / identify / ready / heartbeat / resume / invalid session、intents 位掩码过滤、分片、断线补发 |
-| 群/C2C | 收发文本/markdown/keyboard/ark/embed/媒体、被动回复 5 分钟 + 5 次、`msg_id+msg_seq` 去重、引用、撤回 |
-| 媒体 | `file_type` 1/2/3、multipart 与 url 上传、`file_info` 引用、内容哈希下载 |
-| 事件 | WebSocket 与 Webhook 双投递、URL 校验握手（Ed25519）、事件溯源 |
-| 保真 | QQ 风格错误体 `{code,message,trace_id}`、`X-Tps-Trace-ID`、令牌桶限流三档 |
-| 可观测 | 双向 HTTP/WS 帧、事件流、限流拒绝、DB 大小、覆盖率实时统计 |
-| Agent | CLI（`--json` / 稳定退出码）、MCP stdio server、YAML 场景 + JUnit/TAP |
-| GUI | 状态 / 配置 / 聊天 / 调试器 四页，账号切换快捷键 |
+| 鉴权 | `getAppAccessToken`、`Authorization: QQBot <token>`、7200s 过期、错误码 |
+| 网关 | hello / identify / ready / heartbeat / resume / invalid session、intents、分片、断线补发 |
+| 群/C2C | 文本/markdown/keyboard/ark/embed/媒体、被动窗口与次数、`msg_id+msg_seq` 去重、引用、撤回 |
+| 频道 L2 | guild / channel / member / role、频道消息、`MESSAGE_CREATE` / `AT_MESSAGE_CREATE`、频道频控 |
+| 媒体 | `file_type` 1/2/3、multipart 与 url 上传、内容哈希下载（分片上传未做） |
+| 事件 | WebSocket 与 Webhook 双投递、Ed25519 握手、事件溯源 |
+| 可观测 | 双向 HTTP/WS 帧、事件流、限流拒绝、吞吐、DB 大小、覆盖率实时统计 |
+| Agent | CLI（`--json` / 稳定退出码）、MCP stdio（10 个工具）、10 个 YAML 场景 + JUnit/TAP |
+| GUI | Electron 桌面 + 浏览器预览：状态/配置/聊天/调试器/设置，规则引擎、私聊 Bot、账号切换 |
+| 覆盖率 | 23 条端点：22 已实现（19 full + 3 partial），1 stub |
 
-覆盖率实时数字：`GET /_mqs/contract`，或看 [docs/COVERAGE.md](./docs/COVERAGE.md)（`mqs contract export` 生成）。
+实时覆盖率：`GET /_mqs/contract`，或 [docs/COVERAGE.md](./docs/COVERAGE.md)（`mqs contract export` 生成）。
 
 ## 目录结构
 
@@ -80,25 +113,30 @@ mqs status --json
 src/mqs/
   api/           模拟 QQ API + 网关 WebSocket
   control/       控制 API（GUI/CLI/MCP 共用）
-  domain/        世界模型、事件总线、限流、webhook
+  domain/        世界模型、事件总线、限流（官方频率政策）、webhook
   gateway/       网关协议状态机
   contract/      端点注册表 + 覆盖率/TS 生成
   scenario/      YAML 场景引擎
   compat/        botpy 垫片
   cli.py         mqs 命令行
   mcp_server.py  MCP server
-web/             Vue 3 + Vite 前端
-tests/           pytest（契约/鉴权/网关/消息/限流/场景）
+web/             Vue 3 + Vite 前端（Electron 和浏览器共用）
+desktop/         Electron 主进程 + electron-builder
+tools/           sidecar 构建脚本
+tests/           pytest（契约/鉴权/网关/消息/限流/媒体/频道/场景/CLI/模糊测试）
 ```
 
 ## 开发
 
 ```bash
 # 后端
-.venv/bin/pytest
+.venv/bin/pytest        # 81 项
+.venv/bin/ruff check src tests
+
 # 前端
 cd web && npm install && npm run dev    # 代理到 :5701
-cd web && npm run build                 # 产物由控制 API 托管
+cd web && npm run build                 # 产物由控制 API / Electron 托管
+
 # 契约生成物
 mqs contract export
 ```
@@ -106,8 +144,14 @@ mqs contract export
 ## 安全
 
 - 默认只听 `127.0.0.1`；`--host 0.0.0.0` 需要显式 `--token`，并会在 stderr 警告。
-- 控制 API 要求 token 或 HttpOnly cookie；校验 `Origin`；前端用 URL fragment 里的一次性 nonce 换 cookie（fragment 不会进服务器日志）。
+- 控制 API 要求 token 或 HttpOnly cookie；校验 `Origin`；前端用 URL fragment 里的一次性 nonce 换 cookie。
+- 可选 IP 白名单（`feature.whitelist`）/ scope 校验 / 媒体路径穿越防护。
 - 不做转发到真实 QQ 的代理；不落任何真实用户数据；仓库不含真实 secret。
+
+## 已知未做
+
+钥匙串存储、`--record` 可重放 fixture、大文件分片上传、Koishi/NoneBot/qq-bot-sdk 兼容矩阵、
+频道角色权限位判定。详见 [PLAN.md](./PLAN.md) §12.6。
 
 ## 许可证
 

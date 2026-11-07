@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import secrets
@@ -20,7 +21,7 @@ DB_FILE = "db.sqlite"
 MEDIA_DIR = "media"
 LOCK_FILE = "profile.lock"
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class ProfileLocked(RuntimeError):
@@ -59,6 +60,7 @@ class ProfilePaths:
     def ensure(self) -> ProfilePaths:
         self.directory.mkdir(parents=True, exist_ok=True)
         self.media.mkdir(parents=True, exist_ok=True)
+        self._update_index()
         if not self.meta.exists():
             self.meta.write_text(
                 json.dumps(
@@ -74,6 +76,24 @@ class ProfilePaths:
                 encoding="utf-8",
             )
         return self
+
+    def _update_index(self) -> None:
+        """Maintain the global profiles.json index (doc §8)."""
+        index_path = self.home / "profiles.json"
+        try:
+            data = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else {}
+        except (OSError, ValueError):
+            data = {}
+        profiles = data.setdefault("profiles", {})
+        entry = profiles.setdefault(self.name, {})
+        entry.setdefault("name", self.name)
+        entry.setdefault("path", str(self.directory))
+        entry.setdefault("created_at", datetime.datetime.now().isoformat(timespec="seconds"))
+        entry["last_opened_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = index_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(index_path)
 
 
 @dataclass

@@ -1,0 +1,65 @@
+{
+  "name": "qsandbox-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "QSandbox desktop shell (Electron) — starts the local sandbox server and renders the Vue GUI",
+  "main": "dist/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "npm run build && electron .",
+    "dev": "npm run build && electron .",
+    "dist:linux": "npm run build && electron-builder --linux AppImage deb",
+    "dist:win": "npm run build && electron-builder --win nsis",
+    "dist:mac": "npm run build && electron-builder --mac dmg"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.7.2"
+  },
+  "build": {
+    "appId": "dev.moonlark.qsandbox",
+    "productName": "QSandbox",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../build-sidecar",
+        "to": "sidecar",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development",
+      "artifactName": "QSandbox-${version}-${arch}.${ext}"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "QSandbox-${version}-${arch}.${ext}"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.developer-tools",
+      "artifactName": "QSandbox-${version}-${arch}.${ext}"
+    }
+  },
+  "author": "Moonlark Dev Team",
+  "license": "AGPL-3.0-or-later"
+}

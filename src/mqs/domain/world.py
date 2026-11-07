@@ -56,7 +56,7 @@ class World:
         self.settings: dict[str, Any] = {}
         self.fake = FakeData(42)
         self.hub = Hub()
-        self.rate = RateLimiter(clock, "loose")
+        self.rate = RateLimiter(clock, "certified")
         self.webhooks = WebhookDispatcher(self)
         self.gateway: Any = None  # set by server after construction
         self.started_at = int(time.time() * 1000)
@@ -70,7 +70,7 @@ class World:
         self.settings = await self.db.all_settings()
         self.clock.restore(self.settings.get("clock_mode", "real"), self.settings.get("clock_now_ms") or self.clock.now_ms())
         self.started_at = int(time.time() * 1000)
-        self.rate = RateLimiter(self.clock, self.settings.get("rate_mode", "loose"))
+        self.rate = RateLimiter(self.clock, self.settings.get("rate_mode", "certified"))
         self.fake.reseed(int(self.settings.get("seed", 42)))
         await self._bootstrap()
         await self.db.prune_frames()
@@ -88,13 +88,13 @@ class World:
             await self.create_bot(
                 app_id="10000",
                 secret="mqs-secret-10000",
-                name="MQS 测试 Bot",
+                name="QSandbox 测试 Bot",
                 scopes=[BOT_SCOPE_GROUP, BOT_SCOPE_C2C, BOT_SCOPE_MEDIA, BOT_SCOPE_MEMBER],
             )
         user_count = await self.db.fetchone("SELECT COUNT(*) AS c FROM users")
         if (user_count["c"] if user_count else 0) == 0:
+            # 默认只有一个可操作账号；其他都是群内 npc，不出现在账号切换列表
             await self.create_user(nickname="小满", actor_type="human", behavior="normal")
-            await self.create_user(nickname="星见", actor_type="human", behavior="normal")
             for name in ("青禾", "月汐", "阿柚"):
                 await self.create_user(nickname=name, actor_type="npc", behavior="silent")
         group_count = await self.db.fetchone("SELECT COUNT(*) AS c FROM groups")
@@ -103,10 +103,13 @@ class World:
             members = await self.db.fetchall("SELECT id FROM users ORDER BY id")
             if owner:
                 await self.create_group(
-                    name="MQS 测试群",
+                    name="QSandbox 测试群",
                     owner_id=owner["id"],
                     member_ids=[r["id"] for r in members if r["id"] != owner["id"]],
                 )
+        guild_count = await self.db.fetchone("SELECT COUNT(*) AS c FROM guilds")
+        if (guild_count["c"] if guild_count else 0) == 0:
+            await self.create_guild(name="QSandbox 测试频道")
 
     # ------------------------------------------------------------------ settings
     def setting(self, key: str, default: Any = None) -> Any:
@@ -135,8 +138,9 @@ class World:
                 if value is False:
                     value = "off"
                 elif value is True:
-                    value = "loose"
-                self.rate.set_mode(value)
+                    value = "certified"
+                self.rate.set_mode(str(value))
+                value = self.rate.mode
             await self.db.set_setting(key, value)
             self.settings[key] = value
         return self.settings
@@ -318,6 +322,7 @@ class World:
         avatar: str | None = None,
         scopes: Sequence[str] | None = None,
         delivery: str = "ws",
+        random: bool = False,
     ) -> dict[str, Any]:
         async with self.db.tx() as conn:
             if not app_id:
@@ -333,6 +338,9 @@ class World:
                 raise InvalidParam(f"bot with app_id {app_id} already exists")
             bot_id = app_id
             secret = secret or f"mqs-secret-{app_id}"
+            if random:
+                name = name or self.fake.bot_name()
+                scopes = self.fake.scopes()
             name = name or self.fake.bot_name()
             scopes = list(scopes) if scopes is not None else [BOT_SCOPE_GROUP, BOT_SCOPE_C2C, BOT_SCOPE_MEDIA]
             await conn.execute(
@@ -554,6 +562,343 @@ class World:
     async def remove_bot_from_group(self, group_id: str, bot_id: str) -> None:
         await self.db.execute("DELETE FROM group_bots WHERE group_id=? AND bot_id=?", (group_id, bot_id))
 
+    # ------------------------------------------------------------------ guilds (L2)
+    async def create_guild(
+        self,
+        *,
+        name: str | None = None,
+        owner_id: str | None = None,
+        member_ids: Sequence[str] | None = None,
+        bot_ids: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
+        if not owner_id:
+            row = await self.db.fetchone("SELECT id FROM users WHERE actor_type='human' ORDER BY id LIMIT 1")
+            if row is None:
+                row = await self.db.fetchone("SELECT id FROM users ORDER BY id LIMIT 1")
+            owner_id = row["id"] if row else None
+        if member_ids is None:
+            rows = await self.db.fetchall("SELECT id, nickname FROM users ORDER BY id")
+            member_ids = [r["id"] for r in rows]
+            nicknames = {r["id"]: r["nickname"] for r in rows}
+        else:
+            nicknames = {}
+            for uid in member_ids:
+                row = await self.db.fetchone("SELECT nickname FROM users WHERE id=?", (uid,))
+                nicknames[uid] = row["nickname"] if row else uid
+        if owner_id and owner_id not in member_ids:
+            member_ids = [owner_id, *member_ids]
+            row = await self.db.fetchone("SELECT nickname FROM users WHERE id=?", (owner_id,))
+            nicknames[owner_id] = row["nickname"] if row else owner_id
+        if bot_ids is None:
+            rows = await self.db.fetchall("SELECT id FROM bots ORDER BY id")
+            bot_ids = [r["id"] for r in rows]
+        now = self.clock.now_ms()
+        async with self.db.tx() as conn:
+            cur = await conn.execute("SELECT COUNT(*) AS c FROM guilds")
+            row = await cur.fetchone()
+            await cur.close()
+            gid = f"guild_{int(row['c']) + 1:06d}"
+            await conn.execute(
+                "INSERT INTO guilds(id,name,owner_id,icon,created_at) VALUES(?,?,?,?,?)",
+                (gid, name or self.fake.group_name(), owner_id, self._avatar(gid), now),
+            )
+            for position, (channel_name, channel_type) in enumerate((("大厅", 0), ("闲聊", 0), ("语音房", 2))):
+                cid = f"channel_{gid[-6:]}{position + 1:02d}"
+                await conn.execute(
+                    "INSERT INTO channels(id,guild_id,name,type,position,created_at) VALUES(?,?,?,?,?,?)",
+                    (cid, gid, channel_name, channel_type, position, now),
+                )
+            await conn.execute(
+                "INSERT INTO guild_roles(id,guild_id,name,color,hoist,permissions) VALUES(?,?,?,?,?,?)",
+                (f"{gid}_role_everyone", gid, "全体成员", 0, 0, "0"),
+            )
+            await conn.execute(
+                "INSERT INTO guild_roles(id,guild_id,name,color,hoist,permissions) VALUES(?,?,?,?,?,?)",
+                (f"{gid}_role_admin", gid, "管理员", 0, 1, "8"),
+            )
+            for uid in dict.fromkeys(member_ids):
+                await conn.execute(
+                    "INSERT OR IGNORE INTO guild_members(guild_id,user_id,nickname,member_type,roles,joined_at)"
+                    " VALUES(?,?,?,?,?,?)",
+                    (gid, uid, nicknames.get(uid, uid), "user", "[]", now),
+                )
+            for bid in dict.fromkeys(bot_ids):
+                botrow = await self._fetchone_conn(conn, "SELECT name FROM bots WHERE id=?", (bid,))
+                if botrow:
+                    await conn.execute(
+                        "INSERT OR IGNORE INTO guild_members(guild_id,user_id,nickname,member_type,roles,joined_at)"
+                        " VALUES(?,?,?,?,?,?)",
+                        (gid, bid, botrow["name"], "bot", "[]", now),
+                    )
+            await conn.execute(
+                "INSERT INTO conversations(id,type,peer_id,bot_id,last_seq) VALUES(?,?,?,NULL,0)"
+                " ON CONFLICT(id) DO NOTHING",
+                (f"guild:{gid}", "guild", gid),
+            )
+        return await self.get_guild(gid)
+
+    async def guild_out(self, row: aiosqlite.Row | dict) -> dict[str, Any]:
+        data = dict(row)
+        gid = data["id"]
+        channels = await self.db.fetchall("SELECT * FROM channels WHERE guild_id=? ORDER BY position,id", (gid,))
+        members = await self.db.fetchone("SELECT COUNT(*) AS c FROM guild_members WHERE guild_id=?", (gid,))
+        bots = await self.db.fetchall(
+            "SELECT user_id FROM guild_members WHERE guild_id=? AND member_type='bot'", (gid,)
+        )
+        data["channels"] = [dict(c) for c in channels]
+        data["channel_count"] = len(channels)
+        data["member_count"] = int(members["c"]) if members else 0
+        data["bot_ids"] = [b["user_id"] for b in bots]
+        data["icon"] = data.get("icon") or self._avatar(gid)
+        return data
+
+    async def list_guilds(self, *, bot_id: str | None = None) -> list[dict[str, Any]]:
+        if bot_id:
+            rows = await self.db.fetchall(
+                "SELECT g.* FROM guilds g JOIN guild_members m ON m.guild_id=g.id "
+                "WHERE m.user_id=? AND m.member_type='bot' ORDER BY g.id",
+                (bot_id,),
+            )
+        else:
+            rows = await self.db.fetchall("SELECT * FROM guilds ORDER BY id")
+        return [await self.guild_out(r) for r in rows]
+
+    async def get_guild(self, guild_id: str) -> dict[str, Any]:
+        row = await self.db.fetchone("SELECT * FROM guilds WHERE id=?", (guild_id,))
+        if row is None:
+            raise InvalidParam(f"guild not found: {guild_id}")
+        return await self.guild_out(row)
+
+    async def list_channels(self, guild_id: str) -> list[dict[str, Any]]:
+        rows = await self.db.fetchall("SELECT * FROM channels WHERE guild_id=? ORDER BY position,id", (guild_id,))
+        return [dict(r) for r in rows]
+
+    async def get_channel(self, channel_id: str) -> dict[str, Any]:
+        row = await self.db.fetchone("SELECT * FROM channels WHERE id=?", (channel_id,))
+        if row is None:
+            raise InvalidParam(f"channel not found: {channel_id}")
+        return dict(row)
+
+    async def list_guild_members(self, guild_id: str, *, limit: int = 100, after: str | None = None) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM guild_members WHERE guild_id=?"
+        params: list[Any] = [guild_id]
+        if after:
+            sql += " AND user_id > ?"
+            params.append(after)
+        sql += " ORDER BY user_id LIMIT ?"
+        params.append(max(1, min(limit, 1000)))
+        rows = await self.db.fetchall(sql, params)
+        out = []
+        for row in rows:
+            data = dict(row)
+            data["roles"] = json.loads(data.get("roles") or "[]")
+            data["joined_at"] = self.clock.iso(int(data["joined_at"]))
+            out.append(data)
+        return out
+
+    async def get_guild_member(self, guild_id: str, user_id: str) -> dict[str, Any]:
+        row = await self.db.fetchone(
+            "SELECT * FROM guild_members WHERE guild_id=? AND user_id=?", (guild_id, user_id)
+        )
+        if row is None:
+            raise InvalidParam("guild member not found")
+        data = dict(row)
+        data["roles"] = json.loads(data.get("roles") or "[]")
+        data["joined_at"] = self.clock.iso(int(data["joined_at"]))
+        return data
+
+    async def list_guild_roles(self, guild_id: str) -> list[dict[str, Any]]:
+        rows = await self.db.fetchall("SELECT * FROM guild_roles WHERE guild_id=? ORDER BY id", (guild_id,))
+        return [dict(r) for r in rows]
+
+    def _guild_bot_rows(self, guild_id: str) -> Any:
+        return self.db.fetchall(
+            "SELECT b.* FROM guild_members m JOIN bots b ON b.id=m.user_id "
+            "WHERE m.guild_id=? AND m.member_type='bot'",
+            (guild_id,),
+        )
+
+    def _guild_channel_payload(
+        self,
+        *,
+        msg_id: str,
+        content: str,
+        channel: dict[str, Any],
+        user_id: str,
+        nickname: str,
+        sent_at: int,
+        mentions: Sequence[str] = (),
+        attachments: Sequence[dict[str, Any]] = (),
+    ) -> dict[str, Any]:
+        return {
+            "id": msg_id,
+            "content": content,
+            "channel_id": channel["id"],
+            "guild_id": channel["guild_id"],
+            "author": {"id": user_id, "username": nickname, "bot": False},
+            "member": {"nick": nickname, "roles": [], "joined_at": self.clock.iso(sent_at)},
+            "timestamp": self.clock.iso(sent_at),
+            "mentions": [{"id": m} for m in mentions],
+            "attachments": list(attachments),
+        }
+
+    async def send_as_user_to_channel(
+        self,
+        channel_id: str,
+        user_id: str,
+        content: str,
+        *,
+        mentions: Sequence[str] | None = None,
+        msg_type: int = 0,
+    ) -> dict[str, Any]:
+        channel = await self.get_channel(channel_id)
+        guild_id = channel["guild_id"]
+        member = await self.db.fetchone(
+            "SELECT * FROM guild_members WHERE guild_id=? AND user_id=?", (guild_id, user_id)
+        )
+        if member is None:
+            raise NoPermission("user is not a member of this guild")
+        conversation_id = f"channel:{channel_id}"
+        await self.ensure_conversation(conversation_id)
+        event_id = new_event_id()
+        mention_ids = list(dict.fromkeys(mentions or []))
+        deliveries: list[tuple[str, int, dict[str, Any], dict[str, Any]]] = []
+        async with self.db.tx() as conn:
+            cur = await conn.execute("UPDATE conversations SET last_seq=last_seq+1 WHERE id=?", (conversation_id,))
+            await cur.close()
+            cur = await conn.execute("SELECT last_seq FROM conversations WHERE id=?", (conversation_id,))
+            seq_row = await cur.fetchone()
+            await cur.close()
+            seq = int(seq_row["last_seq"])
+            msg_id = new_msg_id()
+            sent_at = self.clock.now_ms()
+            raw = {
+                "id": msg_id,
+                "content": content,
+                "channel_id": channel_id,
+                "guild_id": guild_id,
+                "timestamp": self.clock.iso(sent_at),
+                "msg_seq": seq,
+            }
+            await conn.execute(
+                "INSERT INTO messages(conversation_id,seq,msg_id,event_id,direction,sender_id,sender_type,bot_id,"
+                "msg_type,content,raw_json,sent_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (conversation_id, seq, msg_id, event_id, "in", user_id, "user", None, msg_type, content,
+                 json.dumps(raw, ensure_ascii=False), sent_at),
+            )
+            bot_rows = await conn.execute(
+                "SELECT b.* FROM guild_members m JOIN bots b ON b.id=m.user_id "
+                "WHERE m.guild_id=? AND m.member_type='bot'",
+                (guild_id,),
+            )
+            bots = list(await bot_rows.fetchall())
+            await bot_rows.close()
+            for bot in bots:
+                payload = self._guild_channel_payload(
+                    msg_id=msg_id, content=content, channel=channel, user_id=user_id,
+                    nickname=member["nickname"] or user_id, sent_at=sent_at, mentions=mention_ids,
+                )
+                payload["author"]["bot"] = False
+                event_type = "AT_MESSAGE_CREATE" if bot["id"] in mention_ids else "MESSAGE_CREATE"
+                cur = await conn.execute(
+                    "INSERT INTO events(event_id,type,payload_json,conversation_id,target_bot_id,created_at)"
+                    " VALUES(?,?,?,?,?,?)",
+                    (event_id, event_type, json.dumps(payload, ensure_ascii=False), conversation_id, bot["id"], sent_at),
+                )
+                deliveries.append((bot["id"], int(cur.lastrowid or 0), payload, dict(bot), event_type))
+                await cur.close()
+        message = await self.db.fetchone("SELECT * FROM messages WHERE msg_id=?", (msg_id,))
+        out = await self.message_out(message)  # type: ignore[arg-type]
+        for bot_id, seq_no, payload, bot, event_type in deliveries:
+            await self._deliver(bot_id, seq_no, event_type, event_id, payload, bot, conversation_id)
+        await self.hub.publish({"kind": "message", "conversation_id": conversation_id, "message": out})
+        return {"message": out, "event_ids": [event_id], "delivered_to": [d[0] for d in deliveries]}
+
+    async def send_channel_message(
+        self, bot_id: str, channel_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        channel = await self.get_channel(channel_id)
+        guild_id = channel["guild_id"]
+        member = await self.db.fetchone(
+            "SELECT * FROM guild_members WHERE guild_id=? AND user_id=? AND member_type='bot'",
+            (guild_id, bot_id),
+        )
+        if member is None:
+            raise NoPermission("bot is not a member of this guild")
+        conversation_id = f"channel:{channel_id}"
+        await self.ensure_conversation(conversation_id)
+        rate_info = self.rate.check_channel_send(bot_id, channel_id)
+        now = self.clock.now_ms()
+        msg_id_in = body.get("msg_id")
+        if msg_id_in:
+            ref = await self.db.fetchone(
+                "SELECT * FROM messages WHERE msg_id=? AND conversation_id=?", (msg_id_in, conversation_id)
+            )
+            if ref is None or ref["direction"] != "in":
+                raise MessageNotFound("msg_id does not refer to an inbound channel message")
+            if now - int(ref["sent_at"]) > 5 * 60 * 1000:
+                raise PassiveWindowExpired("channel passive reply window (5 minutes) has expired")
+            msg_seq = int(body.get("msg_seq") or 1)
+        else:
+            quota = int(self.setting("channel_active_quota_per_day", 20))
+            channel_limit = int(self.setting("channel_active_channel_limit", 2))
+            day = self.clock.now().strftime("%Y-%m-%d")
+            row = await self.db.fetchone(
+                "SELECT used FROM active_quota WHERE bot_id=? AND conversation_id=? AND day=?",
+                (bot_id, conversation_id, day),
+            )
+            used = int(row["used"]) if row else 0
+            if used >= quota:
+                raise QuotaExhausted(f"channel active message quota ({quota}/day) exhausted")
+            if used == 0:
+                counted = await self.db.fetchone(
+                    "SELECT COUNT(DISTINCT conversation_id) AS c FROM active_quota "
+                    "WHERE bot_id=? AND day=? AND conversation_id LIKE 'channel:%' AND used>0",
+                    (bot_id, day),
+                )
+                if counted and int(counted["c"]) >= channel_limit:
+                    raise QuotaExhausted(
+                        f"channel active limit ({channel_limit} channels/day) exhausted"
+                    )
+            await self.db.execute(
+                "INSERT INTO active_quota(bot_id,conversation_id,day,used) VALUES(?,?,?,1) "
+                "ON CONFLICT(bot_id,conversation_id,day) DO UPDATE SET used=used+1",
+                (bot_id, conversation_id, day),
+            )
+            msg_seq = int(body.get("msg_seq") or 1)
+        content = body.get("content") or ""
+        if not content:
+            raise InvalidParam("channel message body is empty")
+        sent_at = self.clock.now_ms()
+        msg_id = new_msg_id("MQS_MSG")
+        raw = dict(body)
+        raw["id"] = msg_id
+        raw["timestamp"] = self.clock.iso(sent_at)
+        raw["msg_seq"] = msg_seq
+        async with self.db.tx() as conn:
+            cur = await conn.execute("UPDATE conversations SET last_seq=last_seq+1 WHERE id=?", (conversation_id,))
+            await cur.close()
+            cur = await conn.execute("SELECT last_seq FROM conversations WHERE id=?", (conversation_id,))
+            seq_row = await cur.fetchone()
+            await cur.close()
+            seq = int(seq_row["last_seq"])
+            await conn.execute(
+                "INSERT INTO messages(conversation_id,seq,msg_id,event_id,direction,sender_id,sender_type,bot_id,"
+                "msg_type,content,raw_json,sent_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (conversation_id, seq, msg_id, None, "out", bot_id, "bot", bot_id, int(body.get("msg_type") or 0),
+                 content, json.dumps(raw, ensure_ascii=False), sent_at),
+            )
+        message = await self.db.fetchone("SELECT * FROM messages WHERE msg_id=?", (msg_id,))
+        out = await self.message_out(message)  # type: ignore[arg-type]
+        await self.hub.publish({"kind": "message", "conversation_id": conversation_id, "message": out})
+        return {
+            "id": msg_id,
+            "timestamp": raw["timestamp"],
+            "seq": seq,
+            "conversation_id": conversation_id,
+            "_rate": rate_info.as_dict(),
+        }
+
     # ------------------------------------------------------------------ conversations
     async def list_conversations(self) -> list[dict[str, Any]]:
         groups = await self.db.fetchall("SELECT * FROM groups ORDER BY id")
@@ -623,6 +968,18 @@ class World:
                 "INSERT INTO conversations(id,type,peer_id,bot_id,last_seq) VALUES(?,?,?,?,0) "
                 "ON CONFLICT(id) DO NOTHING",
                 (conversation_id, "dm", user_id, bot_id),
+            )
+        elif kind == "channel":
+            await self.db.execute(
+                "INSERT INTO conversations(id,type,peer_id,bot_id,last_seq) VALUES(?,?,?,NULL,0) "
+                "ON CONFLICT(id) DO NOTHING",
+                (conversation_id, "channel", peer),
+            )
+        elif kind == "guild":
+            await self.db.execute(
+                "INSERT INTO conversations(id,type,peer_id,bot_id,last_seq) VALUES(?,?,?,NULL,0) "
+                "ON CONFLICT(id) DO NOTHING",
+                (conversation_id, "guild", peer),
             )
 
     async def resolve_conversation(self, *, to: str | None = None, conversation_id: str | None = None) -> str:
@@ -820,13 +1177,13 @@ class World:
                     " VALUES(?,?,?,?,?,?)",
                     (event_id, event_type, json.dumps(payload, ensure_ascii=False), conversation_id, bot["id"], sent_at),
                 )
-                deliveries.append((bot["id"], int(cur.lastrowid or 0), payload, dict(bot)))
+                deliveries.append((bot["id"], int(cur.lastrowid or 0), payload, dict(bot), event_type))
                 await cur.close()
 
         message = await self.db.fetchone("SELECT * FROM messages WHERE msg_id=?", (msg_id,))
         out = await self.message_out(message)  # type: ignore[arg-type]
-        for bot_id, seq_no, payload, bot in deliveries:
-            await self._deliver(bot_id, seq_no, event_type, event_id, payload, bot, conversation_id)
+        for bot_id, seq_no, payload, bot, delivered_type in deliveries:
+            await self._deliver(bot_id, seq_no, delivered_type, event_id, payload, bot, conversation_id)
         await self.hub.publish({"kind": "message", "conversation_id": conversation_id, "message": out})
         await self._maybe_run_rules(event_type, payload=deliveries[0][2] if deliveries else {}, conversation_id=conversation_id)
         return {"message": out, "event_ids": [event_id], "delivered_to": [d[0] for d in deliveries]}
@@ -896,6 +1253,7 @@ class World:
                 raise BotOffline("connect the bot to the gateway before sending messages")
 
         now = self.clock.now_ms()
+        rate_result: dict[str, Any] | None = None
         msg_id_in = body.get("msg_id")
         if msg_id_in:
             ref = await self.db.fetchone(
@@ -903,10 +1261,16 @@ class World:
             )
             if ref is None or ref["direction"] != "in":
                 raise MessageNotFound("msg_id does not refer to an inbound message of this conversation")
-            window = int(self.setting("passive_window_ms", 5 * 60 * 1000))
+            if target_kind == "user":
+                window = int(self.setting("passive_window_c2c_ms", 60 * 60 * 1000))
+                limit = int(self.setting("passive_reply_limit_c2c", 4))
+            else:
+                window = int(self.setting("passive_window_group_ms", 5 * 60 * 1000))
+                limit = int(self.setting("passive_reply_limit_group", 5))
             if now - int(ref["sent_at"]) > window:
-                raise PassiveWindowExpired("passive reply window (5 minutes) has expired")
-            limit = int(self.setting("passive_reply_limit", 5))
+                raise PassiveWindowExpired(
+                    f"passive reply window ({window // 60000} minutes) has expired"
+                )
             wr = await self.db.fetchone(
                 "SELECT * FROM reply_windows WHERE msg_id=? AND bot_id=?", (msg_id_in, bot_id)
             )
@@ -937,7 +1301,9 @@ class World:
             )
         else:
             msg_seq = int(body.get("msg_seq") or 1)
-            quota = int(self.setting("active_quota_per_day", 100))
+            scene = "c2c" if target_kind == "user" else "group"
+            rate_info = self.rate.check_active(bot_id, scene, entity_id)
+            quota = int(self.setting("active_quota_per_day", 1000))
             day = self.clock.now().strftime("%Y-%m-%d")
             row = await self.db.fetchone(
                 "SELECT used FROM active_quota WHERE bot_id=? AND conversation_id=? AND day=?",
@@ -951,6 +1317,7 @@ class World:
                 "ON CONFLICT(bot_id,conversation_id,day) DO UPDATE SET used=used+1",
                 (bot_id, conversation_id, day),
             )
+            rate_result = rate_info.as_dict()
 
         msg_type = int(body.get("msg_type") or 0)
         content = body.get("content") or ""
@@ -1003,7 +1370,10 @@ class World:
             {"request": raw, "response": {"id": msg_id, "timestamp": raw["timestamp"]}},
             bot_id=bot_id,
         )
-        return {"id": msg_id, "timestamp": raw["timestamp"], "seq": seq, "conversation_id": conversation_id}
+        result = {"id": msg_id, "timestamp": raw["timestamp"], "seq": seq, "conversation_id": conversation_id}
+        if rate_result is not None:
+            result["_rate"] = rate_result
+        return result
 
     async def recall_message(self, bot_id: str, target_kind: str, target_openid: str, message_id: str) -> None:
         mapping = await self.resolve_openid(bot_id, target_openid)
@@ -1188,7 +1558,10 @@ class World:
 
     # ------------------------------------------------------------------ status
     async def counts(self) -> dict[str, int]:
-        tables = ["users", "bots", "groups", "messages", "events", "gateway_sessions", "frames", "media", "rules"]
+        tables = [
+            "users", "bots", "groups", "guilds", "channels", "messages", "events",
+            "gateway_sessions", "frames", "media", "rules",
+        ]
         out: dict[str, int] = {}
         for table in tables:
             row = await self.db.fetchone(f"SELECT COUNT(*) AS c FROM {table}")
@@ -1205,6 +1578,10 @@ class World:
         max_message_id = int(row["m"]) if row else 0
         row = await self.db.fetchone("SELECT COALESCE(MAX(id),0) AS m FROM frames")
         max_frame_id = int(row["m"]) if row else 0
+        row = await self.db.fetchone(
+            "SELECT COUNT(*) AS c FROM events WHERE created_at > ?", (self.clock.now_ms() - 60_000,)
+        )
+        events_last_minute = int(row["c"]) if row else 0
 
         return {
             "profile": self.profile,
@@ -1216,6 +1593,7 @@ class World:
             "max_event_seq": max_event_seq,
             "max_message_id": max_message_id,
             "max_frame_id": max_frame_id,
+            "events_last_minute": events_last_minute,
             "rate": self.rate.stats(),
             "gateway": self.gateway.stats() if self.gateway else {"connections": 0, "sessions": 0},
             "db_size": self.db.size_bytes(),

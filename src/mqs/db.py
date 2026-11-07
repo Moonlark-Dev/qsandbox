@@ -18,16 +18,24 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "clock_mode": "real",
     "clock_now_ms": 0,
     "seed": 42,
-    "rate_mode": "loose",
+    "rate_mode": "certified",
     "require_online": True,
-    "feature.whitelist": True,
+    "feature.whitelist": False,
+    "whitelist_ips": ["127.0.0.1", "::1"],
     "feature.expose": "all",
     "chat.auto_at_bot": True,
-    "active_quota_per_day": 100,
-    "passive_window_ms": 5 * 60 * 1000,
-    "passive_reply_limit": 5,
+    "active_quota_per_day": 1000,
+    "channel_active_quota_per_day": 20,
+    "channel_active_channel_limit": 2,
+    "passive_window_c2c_ms": 60 * 60 * 1000,
+    "passive_reply_limit_c2c": 4,
+    "passive_window_group_ms": 5 * 60 * 1000,
+    "passive_reply_limit_group": 5,
     "language": "zh-CN",
     "theme": "auto",
+    "telemetry": False,
+    "autostart": False,
+    "group.ensure_operator_admin": True,
     "timezone": "Asia/Shanghai",
     "heartbeat_interval_ms": 41250,
     "log_level": "info",
@@ -74,7 +82,9 @@ class Database:
             return
         if version == 0:
             await self.conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-        # future migrations: if version < 2: ...
+        if version == 1:
+            migration = Path(__file__).with_name("schema_v2.sql")
+            await self.conn.executescript(migration.read_text(encoding="utf-8"))
         await self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         await self._seed_settings()
 

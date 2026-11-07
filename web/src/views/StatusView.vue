@@ -72,7 +72,7 @@ async function setClockReal() {
       <div class="stat">
         <div class="stat-label">消息 / 事件</div>
         <div class="stat-value">{{ status?.counts.messages ?? 0 }}<span class="faint" style="font-size: 14px"> / {{ status?.counts.events ?? 0 }}</span></div>
-        <div class="stat-sub">seq {{ status?.max_event_seq ?? 0 }}</div>
+        <div class="stat-sub">seq {{ status?.max_event_seq ?? 0 }} · {{ status?.events_last_minute ?? 0 }}/min</div>
       </div>
       <div class="stat">
         <div class="stat-label">限流拒绝</div>

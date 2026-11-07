@@ -202,3 +202,47 @@ async def test_mention_only_delivered_to_mentioned_bot(mqs) -> None:
     events = await mqs.world.list_events()
     group_events = [e for e in events if e["type"] == "GROUP_AT_MESSAGE_CREATE"]
     assert {e["target_bot_id"] for e in group_events} == {"10001"}
+
+
+async def test_c2c_passive_window_60min_and_4_replies(mqs) -> None:
+    ws, ready, token = await mqs.connect_gateway()
+    headers = {"Authorization": f"QQBot {token}"}
+    user = await mqs.user_id()
+    conversation = f"dm:10000:{user}"
+    try:
+        async with httpx.AsyncClient(base_url=mqs.control_base, headers=mqs.headers) as client:
+            response = await client.post(
+                "/_mqs/chat/send",
+                json={"as_user": user, "conversation_id": conversation, "content": "dm ping"},
+            )
+            assert response.status_code == 200, response.text
+        message = await mqs.last_inbound(conversation)
+        event = (await mqs.world.list_events())[-1]
+        openid = event["payload"]["author"]["user_openid"]
+        async with httpx.AsyncClient(base_url=mqs.sim_base) as client:
+            for seq in range(1, 5):
+                response = await client.post(
+                    f"/v2/users/{openid}/messages",
+                    headers=headers,
+                    json={"content": f"dm reply {seq}", "msg_id": message["msg_id"], "msg_seq": seq},
+                )
+                assert response.status_code == 200, response.text
+            fifth = await client.post(
+                f"/v2/users/{openid}/messages",
+                headers=headers,
+                json={"content": "fifth", "msg_id": message["msg_id"]},
+            )
+            assert fifth.status_code == 400
+            assert fifth.json()["code"] == 40057
+
+            mqs.world.clock.advance(61 * 60 * 1000)
+            await mqs.world.persist_clock()
+            late = await client.post(
+                f"/v2/users/{openid}/messages",
+                headers=headers,
+                json={"content": "late", "msg_id": message["msg_id"], "msg_seq": 9},
+            )
+            assert late.status_code == 400
+            assert late.json()["code"] == 40057
+    finally:
+        await ws.close()

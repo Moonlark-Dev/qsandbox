@@ -196,7 +196,7 @@ define(
     path="/users/@me/guilds",
     summary="获取机器人所在频道列表",
     auth="bot",
-    coverage="stub",
+    coverage="full",
     layer="L2",
     tag="guild",
 )
@@ -280,7 +280,7 @@ define(
     path="/guilds/{guild_id}",
     summary="获取频道信息",
     auth="bot",
-    coverage="stub",
+    coverage="full",
     layer="L2",
     tag="guild",
 )
@@ -290,7 +290,7 @@ define(
     path="/guilds/{guild_id}/channels",
     summary="获取子频道列表",
     auth="bot",
-    coverage="stub",
+    coverage="full",
     layer="L2",
     tag="guild",
 )
@@ -300,7 +300,7 @@ define(
     path="/guilds/{guild_id}/members",
     summary="获取频道成员列表",
     auth="bot",
-    coverage="stub",
+    coverage="full",
     layer="L2",
     tag="guild",
 )
@@ -310,7 +310,7 @@ define(
     path="/guilds/{guild_id}/members/{user_id}",
     summary="获取单个频道成员",
     auth="bot",
-    coverage="stub",
+    coverage="full",
     layer="L2",
     tag="guild",
 )
@@ -320,7 +320,7 @@ define(
     path="/guilds/{guild_id}/roles",
     summary="获取频道身份组列表",
     auth="bot",
-    coverage="stub",
+    coverage="full",
     layer="L2",
     tag="guild",
 )
@@ -330,7 +330,7 @@ define(
     path="/channels/{channel_id}",
     summary="获取子频道信息",
     auth="bot",
-    coverage="stub",
+    coverage="full",
     layer="L2",
     tag="guild",
 )
@@ -340,7 +340,7 @@ define(
     path="/channels/{channel_id}/messages/{message_id}",
     summary="获取频道消息",
     auth="bot",
-    coverage="stub",
+    coverage="full",
     layer="L2",
     tag="guild",
 )
@@ -350,7 +350,7 @@ define(
     path="/channels/{channel_id}/messages",
     summary="获取频道消息列表",
     auth="bot",
-    coverage="stub",
+    coverage="full",
     layer="L2",
     tag="guild",
 )
@@ -360,7 +360,7 @@ define(
     path="/channels/{channel_id}/messages",
     summary="发送频道消息",
     auth="bot",
-    coverage="stub",
+    coverage="full",
     layer="L2",
     tag="guild",
 )

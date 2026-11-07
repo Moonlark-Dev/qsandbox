@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import signal
 import socket
 import sys
@@ -135,7 +136,7 @@ async def serve(config: ProcessConfig) -> None:
     write_runtime(config.home, config.profile, handshake)
 
     print(
-        f"\n  MQS  ·  profile={config.profile}  ·  fake data only, not affiliated with Tencent\n"
+        f"\n  QSandbox  ·  profile={config.profile}  ·  fake data only, not affiliated with Tencent\n"
         f"  Simulate API : {config.base_url}\n"
         f"  Gateway      : {config.ws_url}\n"
         f"  Control GUI  : {config.gui_url}\n"
@@ -148,6 +149,14 @@ async def serve(config: ProcessConfig) -> None:
     try:
         await stop.wait()
     finally:
+        # last-resort guard: a stuck websocket/DB close must not orphan the sidecar
+        async def _force_exit() -> None:
+            await asyncio.sleep(2.0)
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(0)
+
+        asyncio.create_task(_force_exit())
         sim_server.should_exit = True
         control_server.should_exit = True
         await asyncio.gather(sim_task, control_task, return_exceptions=True)
@@ -163,6 +172,11 @@ def run(config: ProcessConfig) -> None:
         asyncio.run(serve(config))
     except KeyboardInterrupt:  # pragma: no cover
         pass
+    # some native resources (uvicorn/aiosqlite threads) can keep the interpreter
+    # alive after a clean shutdown; the desktop sidecar must exit promptly.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
 
 
 async def run_headless(config: ProcessConfig) -> dict:

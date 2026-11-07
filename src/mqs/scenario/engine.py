@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 import xml.sax.saxutils as saxutils
@@ -252,13 +253,14 @@ class ScenarioRunner:
         at_bots = value.get("at_bots")
         if at_bots:
             at_bots = [self.bots.get(b, str(b)) for b in at_bots]
+        reply_to = self._subst(str(value["reply_to"])) if value.get("reply_to") else None
         result = await self.world.send_as_user(
             conversation,
             user,
             value.get("text") or "",
             mentions=value.get("mentions"),
             at_bots=at_bots,
-            reply_to=value.get("reply_to"),
+            reply_to=reply_to,
         )
         message = result["message"]
         self.vars["last_message_id"] = message["msg_id"]
@@ -276,6 +278,7 @@ class ScenarioRunner:
         if conversation:
             conversation = self._subst(str(conversation))
         contains = value.get("content_contains")
+        payload_contains = value.get("payload_contains")
         timeout = parse_duration(str(value.get("timeout") or "3s")) / 1000
         baseline = self.baseline_event_seq
         deadline = time.monotonic() + timeout
@@ -291,10 +294,10 @@ class ScenarioRunner:
                     continue
                 if conversation and row["conversation_id"] != conversation:
                     continue
-                import json
-
                 payload = json.loads(row["payload_json"] or "{}")
                 if contains and contains not in (payload.get("content") or ""):
+                    continue
+                if payload_contains and payload_contains not in json.dumps(payload, ensure_ascii=False):
                     continue
                 self.consumed_events.add(row["seq"])
                 self.vars["last_event_id"] = row["event_id"]
@@ -365,12 +368,27 @@ class ScenarioRunner:
         headers = {"Authorization": f"QQBot {token['access_token']}"}
         json_body = self._subst_obj(value.get("json"))
         data = self._subst_obj(value.get("form"))
+        files = None
+        multipart = value.get("multipart")
+        if multipart:
+            import base64
+
+            files = {}
+            spec = multipart.get("file") or {}
+            if spec.get("base64"):
+                files["file"] = (
+                    spec.get("filename") or "file.bin",
+                    base64.b64decode(spec["base64"]),
+                    spec.get("mime") or "application/octet-stream",
+                )
+            data = self._subst_obj(multipart.get("fields") or {})
         if self.sim_app is None:
             raise StepFailed("http steps need a running sim app")
         transport = httpx.ASGITransport(app=self.sim_app)
         async with httpx.AsyncClient(transport=transport, base_url="http://mqs.local") as client:
             response = await client.request(
-                method, path, json=json_body, data=data, headers=headers, timeout=15
+                method, path, json=json_body if files is None else None, data=data,
+                files=files, headers=headers, timeout=15,
             )
         expected_status = value.get("expect_status")
         if expected_status is not None and response.status_code != int(expected_status):

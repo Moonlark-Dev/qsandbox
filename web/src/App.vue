@@ -6,6 +6,7 @@ import StatusView from './views/StatusView.vue'
 import ConfigView from './views/ConfigView.vue'
 import ChatView from './views/ChatView.vue'
 import DebugView from './views/DebugView.vue'
+import SettingsPanel from './views/SettingsPanel.vue'
 
 const tabs = [
   { id: 'status', label: '状态', icon: '◎' },
@@ -27,8 +28,22 @@ watch(view, (value) => localStorage.setItem('mqs-view', value))
 const current = computed(() => tabs.find((tab) => tab.id === view.value) || tabs[0])
 const tokenInput = ref('')
 const loggingIn = ref(false)
+const settingsOpen = ref(false)
 
 let timer: number | undefined
+
+watch(
+  () => state.settings.theme,
+  (theme) => {
+    if (theme === 'dark' || theme === 'light') {
+      document.documentElement.dataset.theme = theme
+    } else {
+      delete document.documentElement.dataset.theme
+    }
+    document.documentElement.lang = state.settings.language || 'zh-CN'
+  },
+  { immediate: true },
+)
 
 onMounted(async () => {
   await bootstrap()
@@ -56,7 +71,7 @@ function refresh() {
 <template>
   <div v-if="state.needAuth" class="auth-mask">
     <div class="card auth-card">
-      <h1>MQS 控制台</h1>
+      <h1>QSandbox 控制台</h1>
       <p class="muted">
         需要控制 API token。用 <code class="mono">mqs status</code> 查看，或从启动日志里的
         <code class="mono">Control token</code> 复制。
@@ -76,7 +91,7 @@ function refresh() {
       <div class="brand">
         <div class="brand-mark">M</div>
         <div>
-          <div class="brand-text">MQS</div>
+          <div class="brand-text">QSandbox</div>
           <div class="brand-sub">QQ Bot Sandbox</div>
         </div>
       </div>
@@ -109,6 +124,7 @@ function refresh() {
         </span>
         <div class="spacer"></div>
         <button class="btn small ghost" @click="refresh">刷新</button>
+        <button class="btn small ghost" @click="settingsOpen = true" title="设置">⚙ 设置</button>
       </header>
       <main class="content" :style="view === 'chat' || view === 'debug' ? 'padding: 0; overflow: hidden' : ''">
         <KeepAlive>
@@ -117,6 +133,8 @@ function refresh() {
       </main>
     </div>
   </div>
+
+  <SettingsPanel v-if="settingsOpen" @close="settingsOpen = false" />
 
   <div v-if="state.toast" class="toast">{{ state.toast }}</div>
 </template>

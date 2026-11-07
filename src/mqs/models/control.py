@@ -101,14 +101,20 @@ class SettingsPatch(BaseModel):
 
     clock_mode: Literal["real", "virtual"] | None = None
     seed: int | None = None
-    rate_mode: Literal["strict", "loose", "off"] | None = None
+    rate_mode: Literal["off", "unverified", "certified", "strict", "loose"] | None = None
     require_online: bool | None = None
     feature_whitelist: bool | None = None
     feature_expose: str | None = None
     chat_auto_at_bot: bool | None = None
     active_quota_per_day: int | None = None
-    passive_window_ms: int | None = None
-    passive_reply_limit: int | None = None
+    passive_window_c2c_ms: int | None = None
+    passive_reply_limit_c2c: int | None = None
+    passive_window_group_ms: int | None = None
+    passive_reply_limit_group: int | None = None
+    theme: Literal["auto", "dark", "light"] | None = None
+    telemetry: bool | None = None
+    autostart: bool | None = None
+    whitelist_ips: list[str] | None = None
     language: str | None = None
     theme: str | None = None
     log_level: str | None = None

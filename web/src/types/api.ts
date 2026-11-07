@@ -250,16 +250,21 @@ export interface ClockSet {
 export interface SettingsPatch {
   clock_mode?: "real" | "virtual" | null;
   seed?: number | null;
-  rate_mode?: "strict" | "loose" | "off" | null;
+  rate_mode?: "off" | "unverified" | "certified" | "strict" | "loose" | null;
   require_online?: boolean | null;
   feature_whitelist?: boolean | null;
   feature_expose?: string | null;
   chat_auto_at_bot?: boolean | null;
   active_quota_per_day?: number | null;
-  passive_window_ms?: number | null;
-  passive_reply_limit?: number | null;
-  language?: string | null;
+  passive_window_c2c_ms?: number | null;
+  passive_reply_limit_c2c?: number | null;
+  passive_window_group_ms?: number | null;
+  passive_reply_limit_group?: number | null;
   theme?: string | null;
+  telemetry?: boolean | null;
+  autostart?: boolean | null;
+  whitelist_ips?: Array<string> | null;
+  language?: string | null;
   log_level?: string | null;
 }
 

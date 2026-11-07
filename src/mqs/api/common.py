@@ -13,7 +13,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from ..domain.ratelimit import route_class
 from ..errors import (
     InvalidToken,
     MQSException,
@@ -50,15 +49,6 @@ async def require_bot(request: Request) -> dict[str, Any]:
     token = _extract_bearer(request)
     bot = await world.authenticate_bot(token)
     request.state.bot = bot
-    klass = route_class(request.url.path)
-    target = (
-        request.path_params.get("group_openid")
-        or request.path_params.get("openid")
-        or request.path_params.get("channel_id")
-        or ""
-    )
-    info = world.rate.check(bot["id"], klass, str(target))
-    request.state.rate_info = info
     return bot
 
 
@@ -117,6 +107,24 @@ class TraceMiddleware(BaseHTTPMiddleware):
             response.headers.setdefault("X-RateLimit-Remaining", str(info.remaining))
             response.headers.setdefault("X-RateLimit-Reset", f"{info.reset_after:.2f}")
         return response
+
+
+class IPWhitelistMiddleware(BaseHTTPMiddleware):
+    """Optional simulation of Tencent's IP allow-list (feature.whitelist)."""
+
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        world = getattr(request.app.state, "world", None)
+        if world is not None and world.setting("feature.whitelist", False):
+            client_host = request.client.host if request.client else ""
+            allowed = set(world.setting("whitelist_ips", []) or [])
+            allowed.update({"127.0.0.1", "::1"})
+            if client_host not in allowed:
+                return JSONResponse(
+                    {"code": 40040, "message": f"ip {client_host} is not in the sandbox whitelist"},
+                    status_code=403,
+                    headers={"X-Tps-Trace-ID": current_trace_id()},
+                )
+        return await call_next(request)
 
 
 class SimLogMiddleware(BaseHTTPMiddleware):

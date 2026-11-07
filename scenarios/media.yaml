@@ -1,0 +1,58 @@
+name: media
+description: 媒体上传：multipart 上传 1x1 PNG -> file_info -> msg_type=7 发送
+setup:
+  settings:
+    rate_mode: "off"
+    require_online: false
+  bots:
+    - app_id: "10000"
+      name: QSandbox 测试 Bot
+      scopes: [group_message, c2c_message, media]
+  users:
+    - alias: alice
+      name: 媒体测试用户
+  groups:
+    - alias: room
+      name: 媒体测试群
+      owner: alice
+      members: [alice]
+      bots: ["10000"]
+steps:
+  - send:
+      as: alice
+      to: room
+      text: media please
+      at_bots: ["10000"]
+  - http:
+      bot: "10000"
+      method: POST
+      target: group
+      group: room
+      path: /v2/groups/{openid}/files
+      multipart:
+        file:
+          filename: pixel.png
+          mime: image/png
+          base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lK3kAAAAAElFTkSuQmCC"
+        fields:
+          file_type: "1"
+      expect_status: 200
+      capture:
+        file_info: file_info
+  - http:
+      bot: "10000"
+      method: POST
+      target: group
+      group: room
+      path: /v2/groups/{openid}/messages
+      json:
+        content: ""
+        msg_type: 7
+        media:
+          file_info: "{{file_info}}"
+        msg_id: "{{incoming_msg_id}}"
+      expect_status: 200
+  - expect_message:
+      conversation: "group:{{room}}"
+      direction: out
+      timeout: 3s
