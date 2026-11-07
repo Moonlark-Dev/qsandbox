@@ -39,6 +39,8 @@ ERRORS: dict[int, tuple[int, str]] = {
     11244: (401, "invalid app secret"),
     40034: (404, "message not found or msg_id invalid"),
     40040: (403, "no permission to perform this action"),
+    404: (404, "endpoint is not exposed by this sandbox"),
+    11253: (403, "no interface access permission"),
     40054: (400, "duplicate reply: msg_id + msg_seq already used"),
     40055: (429, "active message quota exhausted"),
     40056: (403, "bot is not online on any gateway"),
@@ -93,6 +95,21 @@ class MessageNotFound(MQSException):
 
 class NoPermission(MQSException):
     code = 40040
+
+
+class NoInterfaceAccess(MQSException):
+    code = 11253
+
+    def __init__(self, message: str | None = None) -> None:
+        super().__init__(
+            message or "应用无接口访问权限",
+            code=11253,
+            hint="该接口仅白名单机器人可用，请联系平台运营申请权限；或在 QSandbox 里把 Bot 标记为白名单",
+        )
+
+
+class EndpointNotExposed(MQSException):
+    code = 404
 
 
 class DuplicateReply(MQSException):

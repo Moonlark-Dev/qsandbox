@@ -103,7 +103,7 @@ mqs status --json
 | 可观测 | 双向 HTTP/WS 帧、事件流、限流拒绝、吞吐、DB 大小、覆盖率实时统计 |
 | Agent | CLI（`--json` / 稳定退出码）、MCP stdio（10 个工具）、10 个 YAML 场景 + JUnit/TAP |
 | GUI | Electron 桌面 + 浏览器预览：状态/配置/聊天/调试器/设置，规则引擎、私聊 Bot、账号切换 |
-| 覆盖率 | 23 条端点：22 已实现（19 full + 3 partial），1 stub |
+| 覆盖率 | 25 条端点：24 已实现（21 full + 3 partial），1 stub |
 
 实时覆盖率：`GET /_mqs/contract`，或 [docs/COVERAGE.md](./docs/COVERAGE.md)（`mqs contract export` 生成）。
 
@@ -130,7 +130,7 @@ tests/           pytest（契约/鉴权/网关/消息/限流/媒体/频道/场�
 
 ```bash
 # 后端
-.venv/bin/pytest        # 81 项
+.venv/bin/pytest        # 86 项
 .venv/bin/ruff check src tests
 
 # 前端
@@ -145,7 +145,8 @@ mqs contract export
 
 - 默认只听 `127.0.0.1`；`--host 0.0.0.0` 需要显式 `--token`，并会在 stderr 警告。
 - 控制 API 要求 token 或 HttpOnly cookie；校验 `Origin`；前端用 URL fragment 里的一次性 nonce 换 cookie。
-- 可选 IP 白名单（`feature.whitelist`）/ scope 校验 / 媒体路径穿越防护。
+- 可选接口白名单（`feature.whitelist`，内邀接口返回 11253）/ scope 校验 / 媒体路径穿越防护；
+  `feature.expose=public` 可把内邀接口整体隐藏（404）。
 - 不做转发到真实 QQ 的代理；不落任何真实用户数据；仓库不含真实 secret。
 
 ## 已知未做

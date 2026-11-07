@@ -54,7 +54,7 @@ import mqs.compat.botpy   # 必须在创建 botpy.Client 之前 import
 ## 回归方式
 
 ```bash
-pytest tests/                      # 81 项，含网关/消息/限流/频道/场景/CLI/模糊测试
+pytest tests/                      # 86 项，含网关/消息/限流/频道/场景/CLI/模糊测试
 MQS_BASE_URL=http://127.0.0.1:5700 python examples/botpy_echo/bot.py
 mqs script run smoke               # 需要上面这个 echo bot 在线
 ```
@@ -71,3 +71,34 @@ mqs script run smoke               # 需要上面这个 echo bot 在线
   支持 guild/channel/member/role 查询、频道消息收发的 `MESSAGE_CREATE` / `AT_MESSAGE_CREATE`。
 - 桌面端：按用户决定由 Tauri 改为 **Electron**（`desktop/`），sidecar 用 PyInstaller onefile；
   AppImage 已在 Xvfb 下实测启动/退出。
+
+## 接口白名单（内邀接口）
+
+QQ 的“白名单”指**接口访问白名单**，不是 IP 白名单。例如：
+
+- `GET /v2/groups/{group_openid}/members`（60 QPM）
+- `GET /v2/groups/{group_openid}/members/{member_openid}`（30 QPM）
+
+官方文档标注“该能力正在内邀接入中”，非白名单应用调用会返回 **11253 应用无接口访问权限**。
+QSandbox 用两个独立开关模拟：
+
+| 设置 | 作用 |
+|---|---|
+| `feature.whitelist` | 开启时，Bot 必须 `whitelisted=true` 才能调用内邀接口，否则 403/11253 |
+| `feature.expose` | `public` = 内邀接口整体 404；`all` = 挂出来 |
+
+Bot 的 `whitelisted` 可在配置页切换（或 `mqs bot whitelist <app_id> on`）。
+
+## nonebot-adapter-qq
+
+配置页“Bot → 接入信息”会显示并允许复制：
+
+```dotenv
+QQ_API_BASE=http://127.0.0.1:5700/
+QQ_AUTH_BASE=http://127.0.0.1:5700/app/getAppAccessToken
+QQ_CUSTOM_GATEWAY_URL=ws://127.0.0.1:5700/websocket
+QQ_BOTS=[{"id":"10000","secret":"mqs-secret-10000","intent":{...},"use_websocket":true}]
+```
+
+对应 `nonebot-adapter-qq` 的 `Config` 字段：`qq_api_base` / `qq_auth_base` /
+`qq_custom_gateway_url` / `qq_bots`（`QQ_BOTS` 里只有 id + secret，token 由 adapter 换取）。

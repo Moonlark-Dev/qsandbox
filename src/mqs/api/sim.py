@@ -15,12 +15,12 @@ from ..errors import InvalidParam
 from ..ids import avatar_svg, new_msg_id
 from ..models import AppAccessTokenRequest, MediaUploadRequest, MessageSendRequest
 from .common import (
-    IPWhitelistMiddleware,
     SimLogMiddleware,
     TraceMiddleware,
     get_world,
     install_error_handlers,
     require_bot,
+    require_whitelisted_bot,
 )
 
 router = APIRouter()
@@ -83,6 +83,44 @@ async def bot_guilds(request: Request, bot: dict = Depends(require_bot)) -> list
         }
         for g in guilds
     ]
+
+
+@router.get("/v2/groups/{group_openid}/members")
+async def group_members(
+    group_openid: str,
+    request: Request,
+    response: Response,
+    bot: dict = Depends(require_whitelisted_bot),
+    cursor: str = "",
+) -> dict:
+    world: World = get_world(request)
+    mapping = await world.resolve_openid(bot["id"], group_openid)
+    if mapping["kind"] != "group":
+        raise InvalidParam("openid is not a group openid")
+    info = world.rate.check_read(bot["id"], "group_members", 60, 60_000)
+    response.headers["X-RateLimit-Limit"] = str(info.limit)
+    response.headers["X-RateLimit-Remaining"] = str(info.remaining)
+    response.headers["X-RateLimit-Reset"] = f"{info.reset_after:.2f}"
+    return await world.group_members_page(mapping["entity_id"], bot["id"], cursor=cursor, limit=30)
+
+
+@router.get("/v2/groups/{group_openid}/members/{member_openid}")
+async def group_member_detail(
+    group_openid: str,
+    member_openid: str,
+    request: Request,
+    response: Response,
+    bot: dict = Depends(require_whitelisted_bot),
+) -> dict:
+    world: World = get_world(request)
+    mapping = await world.resolve_openid(bot["id"], group_openid)
+    if mapping["kind"] != "group":
+        raise InvalidParam("openid is not a group openid")
+    info = world.rate.check_read(bot["id"], "group_member", 30, 60_000)
+    response.headers["X-RateLimit-Limit"] = str(info.limit)
+    response.headers["X-RateLimit-Remaining"] = str(info.remaining)
+    response.headers["X-RateLimit-Reset"] = f"{info.reset_after:.2f}"
+    return await world.group_member_detail(mapping["entity_id"], bot["id"], member_openid)
 
 
 async def _require_guild_member(world: World, bot_id: str, guild_id: str) -> None:
@@ -492,7 +530,6 @@ def create_sim_app(world: World, config: ProcessConfig) -> FastAPI:
     app.state.config = config
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
     app.add_middleware(SimLogMiddleware)
-    app.add_middleware(IPWhitelistMiddleware)
     app.add_middleware(TraceMiddleware)
     install_error_handlers(app)
     app.include_router(router)

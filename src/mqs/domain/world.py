@@ -168,6 +168,7 @@ class World:
             data["scopes"] = json.loads(data.get("scopes") or "[]")
         except ValueError:
             data["scopes"] = []
+        data["whitelisted"] = bool(data.get("whitelisted", 0))
         data["online"] = bool(self.gateway and self.gateway.is_online(data["id"]))
         return data
 
@@ -323,6 +324,7 @@ class World:
         scopes: Sequence[str] | None = None,
         delivery: str = "ws",
         random: bool = False,
+        whitelisted: bool = False,
     ) -> dict[str, Any]:
         async with self.db.tx() as conn:
             if not app_id:
@@ -344,9 +346,10 @@ class World:
             name = name or self.fake.bot_name()
             scopes = list(scopes) if scopes is not None else [BOT_SCOPE_GROUP, BOT_SCOPE_C2C, BOT_SCOPE_MEDIA]
             await conn.execute(
-                "INSERT INTO bots(id,app_id,secret,name,avatar,scopes,delivery,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                "INSERT INTO bots(id,app_id,secret,name,avatar,scopes,delivery,whitelisted,created_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?)",
                 (bot_id, app_id, secret, name, avatar or self._avatar(f"bot_{bot_id}"),
-                 json.dumps(scopes), delivery, self.clock.now_ms()),
+                 json.dumps(scopes), delivery, 1 if whitelisted else 0, self.clock.now_ms()),
             )
             out = await self._fetchone_conn(conn, "SELECT * FROM bots WHERE id=?", (bot_id,))
         return self.bot_out(out)
@@ -373,6 +376,8 @@ class World:
         for key, value in patch.items():
             if value is None:
                 continue
+            if key == "whitelisted":
+                value = 1 if value else 0
             fields[key] = json.dumps(value) if key == "scopes" else value
         if fields:
             cols = ", ".join(f"{k}=?" for k in fields)
@@ -561,6 +566,86 @@ class World:
 
     async def remove_bot_from_group(self, group_id: str, bot_id: str) -> None:
         await self.db.execute("DELETE FROM group_bots WHERE group_id=? AND bot_id=?", (group_id, bot_id))
+
+    async def group_members_page(
+        self, group_id: str, bot_id: str, cursor: str = "", limit: int = 30
+    ) -> dict[str, Any]:
+        try:
+            offset = max(0, int(cursor or 0))
+        except ValueError:
+            offset = 0
+        members: list[dict[str, Any]] = []
+        user_rows = await self.db.fetchall(
+            "SELECT gm.user_id, gm.role, gm.joined_at, u.nickname, u.actor_type "
+            "FROM group_members gm JOIN users u ON u.id=gm.user_id WHERE gm.group_id=? "
+            "ORDER BY gm.joined_at, gm.user_id",
+            (group_id,),
+        )
+        for row in user_rows:
+            openid = await self.openid(bot_id, "user", row["user_id"])
+            members.append(
+                {
+                    "member_openid": openid,
+                    "username": row["nickname"],
+                    "member_role": row["role"],
+                    "bot": False,
+                    "joined_at": self.clock.iso(int(row["joined_at"])),
+                    "union_openid": union_openid_for(row["user_id"]),
+                }
+            )
+        bot_rows = await self.db.fetchall(
+            "SELECT gb.bot_id, gb.joined_at, b.name AS name, b.app_id AS app_id "
+            "FROM group_bots gb JOIN bots b ON b.id=gb.bot_id WHERE gb.group_id=? "
+            "ORDER BY gb.joined_at, gb.bot_id",
+            (group_id,),
+        )
+        for row in bot_rows:
+            members.append(
+                {
+                    "member_openid": openid_for(row["app_id"], "bot", row["bot_id"]),
+                    "username": row["name"],
+                    "member_role": "member",
+                    "bot": True,
+                    "joined_at": self.clock.iso(int(row["joined_at"])),
+                    "union_openid": union_openid_for(row["bot_id"]),
+                }
+            )
+        members.sort(key=lambda m: m["joined_at"])
+        page = members[offset : offset + limit]
+        next_cursor = str(offset + limit) if offset + limit < len(members) else ""
+        return {"members": page, "next_cursor": next_cursor}
+
+    async def group_member_detail(self, group_id: str, bot_id: str, member_openid: str) -> dict[str, Any]:
+        mapping = await self.db.fetchone(
+            "SELECT * FROM openid_map WHERE bot_id=? AND openid=?", (bot_id, member_openid)
+        )
+        if mapping and mapping["kind"] == "user":
+            row = await self.db.fetchone(
+                "SELECT gm.*, u.nickname FROM group_members gm JOIN users u ON u.id=gm.user_id "
+                "WHERE gm.group_id=? AND gm.user_id=?",
+                (group_id, mapping["entity_id"]),
+            )
+            if row is None:
+                raise InvalidParam("member is not in this group")
+            return {
+                "member_openid": member_openid,
+                "username": row["nickname"],
+                "member_role": row["role"],
+                "bot": False,
+                "joined_at": self.clock.iso(int(row["joined_at"])),
+                "union_openid": union_openid_for(row["user_id"]),
+            }
+        bot_row = await self.bot_by_id(bot_id)
+        if member_openid == openid_for(bot_row["app_id"], "bot", bot_id):
+            return {
+                "member_openid": member_openid,
+                "username": bot_row["name"],
+                "member_role": "member",
+                "bot": True,
+                "joined_at": self.clock.iso(int(bot_row["created_at"])),
+                "union_openid": union_openid_for(bot_id),
+            }
+        raise InvalidParam("member openid not found")
 
     # ------------------------------------------------------------------ guilds (L2)
     async def create_guild(

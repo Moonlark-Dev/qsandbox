@@ -271,6 +271,10 @@ function openNewGroup() {
   newGroupModal.value = true
 }
 
+function isMine(message: any): boolean {
+  return message.sender_type === 'user' && message.sender_id === currentUserId.value
+}
+
 function display(content: string): string {
   return (content || '').replace(/<@![^>]+>/g, '@').trim()
 }
@@ -348,11 +352,12 @@ function isImage(att: any): boolean {
         <div v-if="!messages.length" class="empty">
           {{ dmTarget ? '还没有私聊消息，发一句试试' : '还没有消息' }}
         </div>
-        <div v-for="message in messages" :key="message.msg_id" class="msg" :class="{ out: message.direction === 'out' }">
+        <div v-for="message in messages" :key="message.msg_id" class="msg" :class="{ out: isMine(message) }">
           <img v-if="message.sender" class="avatar sm" :src="message.sender.avatar" alt="" />
           <div>
             <div class="msg-meta">
-              <span>{{ message.sender?.name || message.sender_id }}</span>
+              <span :class="{ 'bot-name': message.sender_type === 'bot' }">{{ message.sender?.name || message.sender_id }}</span>
+              <span v-if="message.sender_type === 'bot'" class="tag info">BOT</span>
               <span>{{ formatTime(message.sent_at) }}</span>
               <span v-if="msgTag(message)" class="tag">{{ msgTag(message) }}</span>
               <span v-if="message.recalled_at" class="tag err">已撤回</span>
@@ -409,6 +414,18 @@ function isImage(att: any): boolean {
     </section>
 
     <aside class="side-panel">
+      <div class="current-identity">
+        <div class="panel-section-title">当前身份</div>
+        <div class="identity-card">
+          <img class="avatar" :src="currentUser?.avatar" alt="" />
+          <div class="grow">
+            <div class="identity-name">{{ currentUser?.nickname || '未选择' }}</div>
+            <div class="identity-id">{{ currentUser?.id }}</div>
+          </div>
+          <span class="tag info">我</span>
+        </div>
+      </div>
+
       <div>
         <div class="panel-section-title">切换账号 <span class="faint">Ctrl+Tab / Ctrl+1..9</span></div>
         <div

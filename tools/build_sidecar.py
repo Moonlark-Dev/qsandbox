@@ -33,10 +33,11 @@ def main() -> int:
         "mqs",
         "--paths",
         str(ROOT / "src"),
-        "--add-data",
-        f"{ROOT / 'src' / 'mqs' / 'schema.sql'}{sep}mqs",
-        "--add-data",
-        f"{ROOT / 'src' / 'mqs' / 'schema_v2.sql'}{sep}mqs",
+        *[
+            item
+            for schema in sorted((ROOT / "src" / "mqs").glob("schema*.sql"))
+            for item in ("--add-data", f"{schema}{sep}mqs")
+        ],
         "--add-data",
         f"{ROOT / 'web' / 'dist'}{sep}web/dist",
         "--collect-submodules",

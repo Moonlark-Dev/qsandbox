@@ -216,6 +216,7 @@ export interface BotCreate {
   scopes?: Array<string>;
   delivery?: "ws" | "webhook";
   random?: boolean;
+  whitelisted?: boolean;
 }
 
 export interface BotPatch {
@@ -223,6 +224,7 @@ export interface BotPatch {
   avatar?: string | null;
   scopes?: Array<string> | null;
   delivery?: "ws" | "webhook" | null;
+  whitelisted?: boolean | null;
 }
 
 export interface ChatSend {
@@ -263,7 +265,6 @@ export interface SettingsPatch {
   theme?: string | null;
   telemetry?: boolean | null;
   autostart?: boolean | null;
-  whitelist_ips?: Array<string> | null;
   language?: string | null;
   log_level?: string | null;
 }

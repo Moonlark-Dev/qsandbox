@@ -2,14 +2,14 @@
 
 > 自动生成 · 文档快照 2026-11-07 · 请勿手改
 
-**23 endpoints — 22 implemented, 1 stubs, 0 n/a**
+**25 endpoints — 24 implemented, 1 stubs, 0 n/a**
 
 | 层级 | 总数 | full | partial | stub | n/a |
 |---|---|---|---|---|---|
 | L0 | 6 | 6 | 0 | 0 | 0 |
 | L1 | 5 | 3 | 2 | 0 | 0 |
 | L2 | 11 | 10 | 0 | 1 | 0 |
-| L3 | 1 | 0 | 1 | 0 | 0 |
+| L3 | 3 | 2 | 1 | 0 | 0 |
 
 ## 明细
 
@@ -37,6 +37,8 @@
 | `GET` | `/guilds/{guild_id}/roles` | full | Bot Token | L2 | 获取频道身份组列表 |
 | `POST` | `/users/@me/dms` | stub | Bot Token | L2 | 创建私信会话（频道私信） |
 | `GET` | `/users/@me/guilds` | full | Bot Token | L2 | 获取机器人所在频道列表 |
+| `GET` | `/v2/groups/{group_openid}/members` | full | Bot Token | L3 | 获取群成员列表（内邀 / 白名单接口） |
+| `GET` | `/v2/groups/{group_openid}/members/{member_openid}` | full | Bot Token | L3 | 获取群成员信息（内邀 / 白名单接口） |
 | `POST` | `/webhook/{bot_id}` | partial | 无 | L3 | Webhook 回调入口（含 URL 校验握手） |
 
 覆盖等级：`full` 行为保真 · `partial` 字段或分支不全 · `stub` 仅返回结构 · `n/a` 明确不模拟。

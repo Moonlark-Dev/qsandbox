@@ -20,8 +20,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "seed": 42,
     "rate_mode": "certified",
     "require_online": True,
-    "feature.whitelist": False,
-    "whitelist_ips": ["127.0.0.1", "::1"],
+    "feature.whitelist": True,
     "feature.expose": "all",
     "chat.auto_at_bot": True,
     "active_quota_per_day": 1000,
@@ -84,6 +83,9 @@ class Database:
             await self.conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         if version == 1:
             migration = Path(__file__).with_name("schema_v2.sql")
+            await self.conn.executescript(migration.read_text(encoding="utf-8"))
+        if version == 2:
+            migration = Path(__file__).with_name("schema_v3.sql")
             await self.conn.executescript(migration.read_text(encoding="utf-8"))
         await self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         await self._seed_settings()

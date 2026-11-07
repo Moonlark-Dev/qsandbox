@@ -11,17 +11,22 @@ const form = reactive({
   log_level: 'info',
   telemetry: false,
   autostart: false,
-  feature_whitelist: false,
-  whitelist_ips: '127.0.0.1, ::1',
+  feature_whitelist: true,
+  feature_expose: 'all',
 })
 
 const desktop = computed(() => (window as any).mqsDesktop as any)
 const status = computed(() => state.status)
 const exporting = ref(false)
+const profiles = ref<any[]>([])
+const currentProfile = ref('')
+const newProfile = ref('')
+const switching = ref(false)
 
 onMounted(async () => {
   await refreshSettings()
   sync()
+  await loadProfiles()
 })
 
 function sync() {
@@ -31,7 +36,38 @@ function sync() {
   form.telemetry = !!state.settings.telemetry
   form.autostart = !!state.settings.autostart
   form.feature_whitelist = !!state.settings['feature.whitelist']
-  form.whitelist_ips = (state.settings['whitelist_ips'] || ['127.0.0.1', '::1']).join(', ')
+  form.feature_expose = state.settings['feature.expose'] || 'all'
+}
+
+async function loadProfiles() {
+  if (!desktop.value?.listProfiles) return
+  try {
+    const data = await desktop.value.listProfiles()
+    profiles.value = data.profiles || []
+    currentProfile.value = data.current || state.status?.profile || ''
+  } catch {
+    profiles.value = []
+  }
+}
+
+async function switchTo(name: string) {
+  if (!desktop.value?.switchProfile || !name || name === currentProfile.value) return
+  switching.value = true
+  try {
+    const result = await desktop.value.switchProfile(name)
+    if (!result?.ok) toast(result?.error || '切换失败')
+  } catch (error) {
+    toast(error instanceof Error ? error.message : String(error))
+  } finally {
+    switching.value = false
+  }
+}
+
+async function createAndSwitch() {
+  const name = newProfile.value.trim()
+  if (!name) return
+  await switchTo(name)
+  newProfile.value = ''
 }
 
 async function save(key: string, value: unknown) {
@@ -159,7 +195,27 @@ function copyCommand() {
       <div class="grid c2" style="gap: 20px">
         <div>
           <div class="panel-section-title">运行</div>
-          <div class="kv"><span class="k">profile</span><span class="v">{{ status?.profile }}</span></div>
+          <div class="kv"><span class="k">profile</span><span class="v">{{ currentProfile || status?.profile }}</span></div>
+          <div v-if="desktop && profiles.length" class="field" style="margin-top: 10px">
+            切换 profile
+            <div class="row" style="gap: 6px">
+              <select class="select" :value="currentProfile" :disabled="switching" @change="switchTo(($event.target as HTMLSelectElement).value)">
+                <option v-for="item in profiles" :key="item.name" :value="item.name">
+                  {{ item.name }}{{ item.current ? '（当前）' : '' }}
+                </option>
+              </select>
+            </div>
+          </div>
+          <div v-if="desktop" class="field" style="margin-top: 10px">
+            新建并切换
+            <div class="row" style="gap: 6px">
+              <input v-model="newProfile" class="input grow" placeholder="例如 dev / test-2" @keyup.enter="createAndSwitch" />
+              <button class="btn small" :disabled="!newProfile.trim() || switching" @click="createAndSwitch">创建</button>
+            </div>
+          </div>
+          <p v-if="desktop" class="small faint" style="margin-top: 8px">
+            切换会重启本地服务并刷新窗口；每个 profile 有独立的 DB / 媒体 / 账号世界。
+          </p>
           <div class="kv"><span class="k">profile 路径</span><span class="v">{{ status?.profile_dir }}</span></div>
           <div class="kv"><span class="k">端口</span><span class="v">sim {{ status?.sim_port }} · control {{ status?.control_port }}</span></div>
           <div class="kv"><span class="k">DB / 运行时长</span><span class="v">{{ formatBytes(status?.db_size || 0) }} · {{ formatDuration(status?.uptime_ms || 0) }}</span></div>
@@ -175,18 +231,18 @@ function copyCommand() {
           <label class="switch" style="margin-top: 12px">
             <input type="checkbox" v-model="form.feature_whitelist" @change="save('feature.whitelist', form.feature_whitelist)" />
             <span class="track"><span class="thumb"></span></span>
-            模拟腾讯 IP / 权限白名单
+            模拟腾讯接口白名单（内邀接口返回 11253）
           </label>
-          <label v-if="form.feature_whitelist" class="field" style="margin-top: 10px">
-            允许的 IP（逗号分隔）
-            <input
-              v-model="form.whitelist_ips"
-              class="input"
-              @change="save('whitelist_ips', form.whitelist_ips.split(',').map((s) => s.trim()).filter(Boolean))"
-            />
+          <label class="field" style="margin-top: 12px">
+            沙箱暴露范围
+            <select v-model="form.feature_expose" class="select" @change="save('feature.expose', form.feature_expose)">
+              <option value="all">all — 暴露全部接口</option>
+              <option value="public">public — 只暴露公开接口（内邀接口 404）</option>
+            </select>
           </label>
           <p class="small faint" style="margin-top: 10px">
-            与“沙箱暴露哪些接口”是两个独立开关；白名单 IP 在配置页维护。
+            “接口白名单”模拟腾讯侧内邀权限（如获取群成员列表 11253）；
+            “暴露范围”决定沙箱是否把这些接口挂出来。两者独立。
           </p>
         </div>
       </div>

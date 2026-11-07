@@ -6,6 +6,7 @@ import { refreshStatus, state, toast } from '../store'
 const tokenInfo = ref<{ access_token: string; app_id: string } | null>(null)
 const profiles = ref<any[]>([])
 const busy = ref(false)
+const desktopBridge = (window as any).mqsDesktop
 
 const status = computed(() => state.status)
 const primaryBot = computed(() => state.bots[0])
@@ -19,6 +20,15 @@ const coveragePercent = computed(() => {
 onMounted(async () => {
   await Promise.all([loadProfiles(), refreshStatus()])
 })
+
+async function switchProfile(name: string) {
+  if (!desktopBridge?.switchProfile) return
+  if (!confirm(`切换到 profile「${name}」？本地服务会重启，窗口会自动刷新。`)) return
+  busy.value = true
+  const result = await desktopBridge.switchProfile(name)
+  busy.value = false
+  if (!result?.ok) toast(result?.error || '切换失败')
+}
 
 async function loadProfiles() {
   try {
@@ -158,8 +168,16 @@ async function setClockReal() {
               <td><span class="tag" :class="profile.running ? 'ok' : ''">{{ profile.running ? '运行中' : '未运行' }}</span></td>
               <td class="mono small">{{ profile.sim_port ?? '—' }} / {{ profile.control_port ?? '—' }}</td>
               <td class="actions">
-                <button v-if="profile.running && !profile.current" class="btn small" @click="copy(profile.gui_url, 'GUI 链接已复制')">复制 GUI 链接</button>
-                <button v-else-if="!profile.running" class="btn small ghost" @click="copy(`mqs serve --profile ${profile.name}`, '启动命令已复制')">复制启动命令</button>
+                <button
+                  v-if="desktopBridge && !profile.current"
+                  class="btn small primary"
+                  :disabled="busy"
+                  @click="switchProfile(profile.name)"
+                >
+                  切换
+                </button>
+                <button v-if="profile.running && !profile.current && !desktopBridge" class="btn small" @click="copy(profile.gui_url, 'GUI 链接已复制')">复制 GUI 链接</button>
+                <button v-if="!profile.running && !desktopBridge" class="btn small ghost" @click="copy(`mqs serve --profile ${profile.name}`, '启动命令已复制')">复制启动命令</button>
               </td>
             </tr>
             <tr v-if="!profiles.length"><td colspan="4" class="muted">暂无 profile</td></tr>

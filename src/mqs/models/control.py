@@ -63,6 +63,7 @@ class BotCreate(BaseModel):
     scopes: list[str] = Field(default_factory=lambda: ["group_message", "c2c_message", "media"])
     delivery: Literal["ws", "webhook"] = "ws"
     random: bool = False
+    whitelisted: bool = False
 
 
 class BotPatch(BaseModel):
@@ -70,6 +71,7 @@ class BotPatch(BaseModel):
     avatar: str | None = None
     scopes: list[str] | None = None
     delivery: Literal["ws", "webhook"] | None = None
+    whitelisted: bool | None = None
 
 
 class ChatSend(BaseModel):
@@ -114,7 +116,6 @@ class SettingsPatch(BaseModel):
     theme: Literal["auto", "dark", "light"] | None = None
     telemetry: bool | None = None
     autostart: bool | None = None
-    whitelist_ips: list[str] | None = None
     language: str | None = None
     theme: str | None = None
     log_level: str | None = None

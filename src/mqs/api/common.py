@@ -6,9 +6,9 @@ import json
 import secrets
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import Request, Response
+from fastapi import Depends, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -49,6 +49,20 @@ async def require_bot(request: Request) -> dict[str, Any]:
     token = _extract_bearer(request)
     bot = await world.authenticate_bot(token)
     request.state.bot = bot
+    return bot
+
+
+async def require_whitelisted_bot(
+    request: Request, bot: Annotated[dict[str, Any], Depends(require_bot)]
+) -> dict[str, Any]:
+    """Invite-only endpoints (QQ error 11253) + sandbox exposure switch."""
+    from ..errors import EndpointNotExposed, NoInterfaceAccess
+
+    world = get_world(request)
+    if world.setting("feature.expose", "all") == "public":
+        raise EndpointNotExposed("this endpoint is not exposed by the sandbox")
+    if world.setting("feature.whitelist", True) and not bot.get("whitelisted"):
+        raise NoInterfaceAccess()
     return bot
 
 
@@ -107,24 +121,6 @@ class TraceMiddleware(BaseHTTPMiddleware):
             response.headers.setdefault("X-RateLimit-Remaining", str(info.remaining))
             response.headers.setdefault("X-RateLimit-Reset", f"{info.reset_after:.2f}")
         return response
-
-
-class IPWhitelistMiddleware(BaseHTTPMiddleware):
-    """Optional simulation of Tencent's IP allow-list (feature.whitelist)."""
-
-    async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        world = getattr(request.app.state, "world", None)
-        if world is not None and world.setting("feature.whitelist", False):
-            client_host = request.client.host if request.client else ""
-            allowed = set(world.setting("whitelist_ips", []) or [])
-            allowed.update({"127.0.0.1", "::1"})
-            if client_host not in allowed:
-                return JSONResponse(
-                    {"code": 40040, "message": f"ip {client_host} is not in the sandbox whitelist"},
-                    status_code=403,
-                    headers={"X-Tps-Trace-ID": current_trace_id()},
-                )
-        return await call_next(request)
 
 
 class SimLogMiddleware(BaseHTTPMiddleware):

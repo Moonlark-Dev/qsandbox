@@ -13,7 +13,11 @@ const groupModal = ref(false)
 const groupForm = reactive({ name: '', owner_id: '', random_members: 3, seed: '' as string | number, bot_ids: [] as string[] })
 
 const botModal = ref(false)
-const botForm = reactive({ app_id: '', name: '', scopes: 'group_message, c2c_message, media', delivery: 'ws', random: false })
+const botForm = reactive({ app_id: '', name: '', scopes: 'group_message, c2c_message, media', delivery: 'ws', random: false, whitelisted: false })
+const connectOpen = ref(false)
+const connectBot = ref<any>(null)
+const connectToken = ref('')
+const connectError = ref('')
 
 const memberModal = ref(false)
 const memberGroup = ref<any>(null)
@@ -234,18 +238,20 @@ async function addRandomAdmins() {
 
 async function createBot() {
   try {
-    await api.post('/_mqs/bots', {
+    const created = await api.post<any>('/_mqs/bots', {
       app_id: botForm.random ? null : botForm.app_id || null,
       name: botForm.random ? null : botForm.name || null,
       scopes: botForm.random ? [] : botForm.scopes.split(',').map((s) => s.trim()).filter(Boolean),
       delivery: botForm.delivery,
       random: botForm.random,
+      whitelisted: botForm.whitelisted,
     })
     botModal.value = false
     botForm.app_id = ''
     botForm.name = ''
     await refreshWorld()
     toast('Bot 已创建')
+    await openConnect(created)
   } catch (error) {
     fail(error)
   }
@@ -270,6 +276,76 @@ async function editScopes(bot: any) {
     toast('能力集已更新')
   } catch (error) {
     fail(error)
+  }
+}
+
+async function openConnect(bot: any) {
+  connectBot.value = bot
+  connectOpen.value = true
+  connectToken.value = ''
+  connectError.value = ''
+  try {
+    const data = await api.post<any>(`/_mqs/bots/${bot.id}/token`)
+    connectToken.value = data.access_token
+  } catch (error) {
+    connectError.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
+async function toggleWhitelist(bot: any) {
+  try {
+    await api.patch(`/_mqs/bots/${bot.id}`, { whitelisted: !bot.whitelisted })
+    await refreshWorld()
+    toast(bot.whitelisted ? '已取消接口白名单' : '已加入接口白名单')
+  } catch (error) {
+    fail(error)
+  }
+}
+
+const nonebotIntents = {
+  guilds: false,
+  guild_members: false,
+  guild_messages: false,
+  guild_message_reactions: false,
+  direct_message: false,
+  open_forum_event: false,
+  audio_live_member: false,
+  group_members: true,
+  c2c_group_at_messages: true,
+  interaction: false,
+  message_audit: true,
+  forum_event: false,
+  audio_action: false,
+  at_messages: false,
+}
+
+const baseUrl = computed(() => (state.status?.base_url || 'http://127.0.0.1:5700').replace(/\/$/, ''))
+const wsUrl = computed(() => state.status?.ws_url || 'ws://127.0.0.1:5700/websocket')
+const nonebotBots = computed(() => {
+  if (!connectBot.value) return '[]'
+  return JSON.stringify([
+    {
+      id: connectBot.value.app_id,
+      secret: connectBot.value.secret,
+      intent: nonebotIntents,
+      use_websocket: true,
+    },
+  ])
+})
+const nonebotEnv = computed(
+  () =>
+    `QQ_API_BASE=${baseUrl.value}/\n` +
+    `QQ_AUTH_BASE=${baseUrl.value}/app/getAppAccessToken\n` +
+    `QQ_CUSTOM_GATEWAY_URL=${wsUrl.value}\n` +
+    `QQ_BOTS=${nonebotBots.value}`,
+)
+
+async function copyText(text: string, label = '已复制') {
+  try {
+    await navigator.clipboard.writeText(text)
+    toast(label)
+  } catch {
+    toast('复制失败')
   }
 }
 
@@ -311,7 +387,8 @@ const worldSettings = computed<any[]>(() => [
   },
   { key: 'require_online', label: '发送消息要求 Bot 在线（保真开关）', type: 'switch' },
   { key: 'chat.auto_at_bot', label: '聊天页默认 @ 群内所有 Bot', type: 'switch' },
-  { key: 'feature.whitelist', label: '模拟腾讯 IP / 权限白名单', type: 'switch' },
+  { key: 'feature.whitelist', label: '模拟腾讯接口白名单（内邀接口）', type: 'switch' },
+  { key: 'feature.expose', label: '沙箱暴露范围', type: 'select', options: [{ value: 'all', label: 'all（全部）' }, { value: 'public', label: 'public（仅公开）' }] },
   { key: 'active_quota_per_day', label: '主动消息配额（每天/会话）', type: 'number' },
   { key: 'passive_window_ms', label: '被动回复窗口（毫秒）', type: 'number' },
 ])
@@ -404,8 +481,15 @@ const worldSettings = computed<any[]>(() => [
               <td><span class="row"><img class="avatar sm" :src="bot.avatar" alt="" />{{ bot.name }}</span></td>
               <td class="mono small">{{ bot.secret }}</td>
               <td class="small">{{ bot.scopes.join(', ') }}</td>
-              <td><span class="tag" :class="bot.online ? 'ok' : ''">{{ bot.online ? '在线' : '离线' }}</span></td>
+              <td>
+                <span class="tag" :class="bot.online ? 'ok' : ''">{{ bot.online ? '在线' : '离线' }}</span>
+                <span class="tag" :class="bot.whitelisted ? 'info' : ''">{{ bot.whitelisted ? '内邀白名单' : '公开接口' }}</span>
+              </td>
               <td class="actions">
+                <button class="btn small primary" @click="openConnect(bot)">接入信息</button>
+                <button class="btn small" :class="bot.whitelisted ? '' : 'ghost'" @click="toggleWhitelist(bot)">
+                  {{ bot.whitelisted ? '白名单' : '未白名单' }}
+                </button>
                 <button class="btn small" @click="editScopes(bot)">权限</button>
                 <button class="btn small" @click="rotateSecret(bot.id)">重置 secret</button>
                 <button class="btn small danger" @click="deleteBot(bot.id)">删除</button>
@@ -569,6 +653,7 @@ const worldSettings = computed<any[]>(() => [
           <label class="field">投递方式
             <select v-model="botForm.delivery" class="select"><option value="ws">WebSocket</option><option value="webhook">Webhook</option></select>
           </label>
+          <label class="switch"><input v-model="botForm.whitelisted" type="checkbox" /><span class="track"><span class="thumb"></span></span> 加入内邀接口白名单</label>
         </div>
         <div class="modal-actions">
           <button class="btn ghost" @click="botModal = false">取消</button>
@@ -615,6 +700,55 @@ const worldSettings = computed<any[]>(() => [
       </div>
     </div>
 
+
+    <!-- connection info modal -->
+    <div v-if="connectOpen && connectBot" class="modal-mask" @click.self="connectOpen = false">
+      <div class="modal" style="width: min(760px, calc(100vw - 32px)); max-height: 88vh; overflow: auto">
+        <h3>接入信息 · {{ connectBot.name }}</h3>
+        <div class="grid c2" style="gap: 14px">
+          <div class="card" style="padding: 12px">
+            <div class="panel-section-title">API / 网关</div>
+            <div class="kv"><span class="k">appid</span><span class="v">{{ connectBot.app_id }}</span></div>
+            <div class="kv"><span class="k">secret</span><span class="v">{{ connectBot.secret }}</span></div>
+            <div class="kv"><span class="k">base_url</span><span class="v">{{ baseUrl }}</span></div>
+            <div class="kv"><span class="k">ws_url</span><span class="v">{{ wsUrl }}</span></div>
+            <div class="kv"><span class="k">access_token</span><span class="v mono small">{{ connectToken || (connectError ? '获取失败' : '获取中…') }}</span></div>
+            <div class="kv"><span class="k">scopes</span><span class="v">{{ connectBot.scopes.join(', ') }}</span></div>
+            <div class="kv"><span class="k">接口白名单</span><span class="v">{{ connectBot.whitelisted ? '是（内邀接口可用）' : '否（内邀接口 11253）' }}</span></div>
+          </div>
+          <div class="card" style="padding: 12px">
+            <div class="panel-section-title">botpy 直连</div>
+            <p class="small muted">真实 botpy 需要垫片：</p>
+            <pre class="mono small" style="white-space: pre-wrap; margin: 0">import mqs.compat.botpy
+from botpy import Client
+Client(intents=Intents(public_messages=True)).run(
+    appid="{{ connectBot.app_id }}",
+    secret="{{ connectBot.secret }}",
+)</pre>
+            <button class="btn small" style="margin-top: 8px" @click="copyText(`MQS_BASE_URL=${baseUrl}\npython examples/botpy_echo/bot.py`, 'botpy 命令已复制')">复制 botpy 命令</button>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top: 14px; padding: 12px">
+          <div class="row" style="margin-bottom: 8px">
+            <div class="panel-section-title" style="margin: 0">nonebot-adapter-qq 环境变量</div>
+            <div class="spacer"></div>
+            <button class="btn small primary" @click="copyText(nonebotEnv, '.env 已复制')">复制全部 .env</button>
+            <button class="btn small" @click="copyText(nonebotBots, 'QQ_BOTS 已复制')">复制 QQ_BOTS</button>
+          </div>
+          <pre class="mono small" style="white-space: pre-wrap; word-break: break-all; background: var(--panel-2); padding: 10px; border-radius: 8px; margin: 0">{{ nonebotEnv }}</pre>
+          <p class="small faint" style="margin: 8px 0 0">
+            依赖 nonebot-adapter-qq 的 <code>QQ_API_BASE</code> / <code>QQ_AUTH_BASE</code> /
+            <code>QQ_CUSTOM_GATEWAY_URL</code> / <code>QQ_BOTS</code> 配置项。token 由 adapter 用 secret 换取，无需手填。
+          </p>
+        </div>
+
+        <div class="modal-actions">
+          <button class="btn ghost" @click="copyText(connectToken, 'token 已复制')" :disabled="!connectToken">复制 token</button>
+          <button class="btn primary" @click="connectOpen = false">完成</button>
+        </div>
+      </div>
+    </div>
     <p v-if="errorText" class="small" style="color: var(--red); margin-top: 12px">{{ errorText }}</p>
   </div>
 </template>

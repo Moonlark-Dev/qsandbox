@@ -131,6 +131,19 @@ class RateLimiter:
         reset_after = max(0.0, stamps[0] + period - now) if stamps else period
         return True, reset_after, remaining
 
+    def check_read(self, bot_id: str, bucket: str, limit: int, period_ms: int) -> RateInfo:
+        """Fixed QPM/QPS limits on read endpoints (e.g. group members 60 QPM)."""
+        if self.mode == "off":
+            return RateInfo(limit=0, remaining=0, reset_after=0.0)
+        window = Window(limit, period_ms)
+        now = self.clock.now_ms() / 1000.0
+        ok, wait, remaining = self._take(f"{bot_id}:read:{bucket}", window, now)
+        if not ok:
+            self.rejected += 1
+            raise RateLimited(wait, limit=limit, remaining=0, bucket=bucket)
+        self.allowed += 1
+        return RateInfo(limit, remaining, wait, bucket)
+
     def check_channel_send(self, bot_id: str, channel_id: str) -> RateInfo:
         """Channels: at most 5 messages/second per channel, active or passive."""
         if self.mode == "off":

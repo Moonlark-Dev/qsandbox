@@ -375,6 +375,34 @@ define(
     tag="guild",
 )
 define(
+    "group.members.list",
+    method="GET",
+    path="/v2/groups/{group_openid}/members",
+    summary="获取群成员列表（内邀 / 白名单接口）",
+    auth="bot",
+    scopes=("member",),
+    rate_class="read",
+    errors=(11253, 40040),
+    coverage="full",
+    layer="L3",
+    tag="member",
+    notes="官方 60 QPM；需白名单，错误码 11253",
+)
+define(
+    "group.members.get",
+    method="GET",
+    path="/v2/groups/{group_openid}/members/{member_openid}",
+    summary="获取群成员信息（内邀 / 白名单接口）",
+    auth="bot",
+    scopes=("member",),
+    rate_class="read",
+    errors=(11253, 40040),
+    coverage="full",
+    layer="L3",
+    tag="member",
+    notes="官方 30 QPM；需白名单，错误码 11253",
+)
+define(
     "webhook.verify",
     method="POST",
     path="/webhook/{bot_id}",

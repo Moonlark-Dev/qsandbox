@@ -413,6 +413,7 @@ async def create_bot(payload: BotCreate, request: Request) -> dict:
         scopes=payload.scopes,
         delivery=payload.delivery,
         random=payload.random,
+        whitelisted=payload.whitelisted,
     )
 
 

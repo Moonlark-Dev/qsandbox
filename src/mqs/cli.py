@@ -322,6 +322,19 @@ def group_list(profile: ProfileOpt = DEFAULT_PROFILE, home: HomeOpt = "", as_jso
 # bots
 # ---------------------------------------------------------------------------
 
+@bot_app.command("whitelist")
+def bot_whitelist(
+    app_id: Annotated[str, typer.Argument(help="Bot app_id")],
+    state: Annotated[str, typer.Argument(help="on / off")],
+    profile: ProfileOpt = DEFAULT_PROFILE,
+    home: HomeOpt = "",
+) -> None:
+    """设置 Bot 的内邀接口白名单（模拟腾讯 11253）。"""
+    enabled = state.lower() in ("on", "true", "1", "yes")
+    data = Client(home, profile).patch(f"/_mqs/bots/{app_id}", json={"whitelisted": enabled})
+    typer.echo(f"{data['app_id']} whitelisted={data['whitelisted']}")
+
+
 @bot_app.command("list")
 def bot_list(profile: ProfileOpt = DEFAULT_PROFILE, home: HomeOpt = "", as_json: JsonOpt = False) -> None:
     """列出 Bot。"""
@@ -330,8 +343,11 @@ def bot_list(profile: ProfileOpt = DEFAULT_PROFILE, home: HomeOpt = "", as_json:
         _emit(data, True)
     else:
         _table(
-            ["app_id", "name", "secret", "online", "scopes"],
-            [[b["app_id"], b["name"], b["secret"], b["online"], ",".join(b["scopes"])] for b in data],
+            ["app_id", "name", "secret", "online", "whitelist", "scopes"],
+            [
+                [b["app_id"], b["name"], b["secret"], b["online"], "yes" if b.get("whitelisted") else "no", ",".join(b["scopes"])]
+                for b in data
+            ],
         )
 
 
@@ -342,6 +358,7 @@ def bot_create(
     secret: Annotated[str, typer.Option("--secret")] = "",
     delivery: Annotated[str, typer.Option("--delivery")] = "ws",
     random: Annotated[bool, typer.Option("--random", help="随机名称与能力集")] = False,
+    whitelisted: Annotated[bool, typer.Option("--whitelisted", help="加入内邀接口白名单")] = False,
     profile: ProfileOpt = DEFAULT_PROFILE,
     home: HomeOpt = "",
     as_json: JsonOpt = False,
@@ -355,6 +372,7 @@ def bot_create(
             "secret": secret or None,
             "delivery": delivery,
             "random": random,
+            "whitelisted": whitelisted,
         },
     )
     _emit(data, as_json) if as_json else typer.echo(f"created bot {data['app_id']} secret={data['secret']}")

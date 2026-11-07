@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS bots (
     avatar     TEXT NOT NULL DEFAULT '',
     scopes     TEXT NOT NULL DEFAULT '[]',
     delivery   TEXT NOT NULL DEFAULT 'ws',    -- ws | webhook
+    whitelisted INTEGER NOT NULL DEFAULT 0,   -- 内邀接口白名单
     created_at INTEGER NOT NULL
 );
 
