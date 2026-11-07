@@ -6,12 +6,14 @@ import StatusView from './views/StatusView.vue'
 import ConfigView from './views/ConfigView.vue'
 import ChatView from './views/ChatView.vue'
 import DebugView from './views/DebugView.vue'
+import GuildView from './views/GuildView.vue'
 import SettingsPanel from './views/SettingsPanel.vue'
 
 const tabs = [
   { id: 'status', label: '状态', icon: '◎' },
   { id: 'config', label: '配置', icon: '⚙' },
   { id: 'chat', label: '聊天', icon: '💬' },
+  { id: 'guild', label: '频道', icon: '🏛' },
   { id: 'debug', label: '调试器', icon: '⌘' },
 ] as const
 
@@ -19,6 +21,7 @@ const views: Record<string, any> = {
   status: StatusView,
   config: ConfigView,
   chat: ChatView,
+  guild: GuildView,
   debug: DebugView,
 }
 

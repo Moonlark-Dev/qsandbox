@@ -45,7 +45,22 @@ export const api = {
     request<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) }),
   patch: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: 'PATCH', body: body === undefined ? undefined : JSON.stringify(body) }),
+  put: <T>(path: string, body?: unknown) =>
+    request<T>(path, { method: 'PUT', body: body === undefined ? undefined : JSON.stringify(body) }),
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  upload: <T>(path: string, file: File): Promise<T> => {
+    const body = new FormData()
+    body.append('file', file)
+    const headers = new Headers()
+    const token = getToken()
+    if (token) headers.set('X-MQS-Token', token)
+    return fetch(path, { method: 'POST', body, headers, credentials: 'include' }).then(async (response) => {
+      const text = await response.text()
+      const data = text ? JSON.parse(text) : null
+      if (!response.ok) throw new ApiError(response.status, data?.code ?? response.status, data?.message ?? response.statusText)
+      return data as T
+    })
+  },
 }
 
 /** Exchange the one-time nonce in the URL fragment for an HttpOnly cookie. */

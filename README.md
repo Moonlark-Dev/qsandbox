@@ -96,14 +96,19 @@ mqs status --json
 |---|---|
 | 鉴权 | `getAppAccessToken`、`Authorization: QQBot <token>`、7200s 过期、错误码 |
 | 网关 | hello / identify / ready / heartbeat / resume / invalid session、intents、分片、断线补发 |
-| 群/C2C | 文本/markdown/keyboard/ark/embed/媒体、被动窗口与次数、`msg_id+msg_seq` 去重、引用、撤回、按钮点击（指令/回调/链接）、不 @ Bot 的普通群消息 |
-| 频道 L2 | guild / channel / member / role、频道消息、`MESSAGE_CREATE` / `AT_MESSAGE_CREATE`、频道频控 |
+| 群/C2C | 文本/markdown/keyboard/ark/embed/媒体、被动窗口与次数、`msg_id+msg_seq` 去重、引用、撤回、按钮点击（指令/回调/链接）；**未选择 Bot 时默认不 @ 任何 Bot** |
+| 群管理 | 群基本信息、机器人群内状态（主动消息开关）、成员禁言（add/update/del）、黑名单、入群申请列表与审批、批量移除 |
+| 频道 L2 | guild / channel / member / role、频道消息、`MESSAGE_CREATE` / `AT_MESSAGE_CREATE`、频道频控；**子频道创建/改名/删除**、身份组 CRUD 与成员分配、成员禁言/踢出、全员禁言 |
+| 频道私信 | `POST /users/@me/dms` 建会话、`/dms/{guild_id}/messages` 收发与撤回、`DIRECT_MESSAGE_CREATE`、2 条/天/用户 + 200 条/天/Bot 主动限额 |
+| 好友 | `FRIEND_ADD` / `FRIEND_DEL` 事件、好友列表与关系校验（可选主动消息前置条件） |
+| 用户富媒体 | 控制台上传图片/视频 → 群/单聊/频道/频道私信附件，支持文件选择、粘贴、拖拽，`msg_type=7` |
+| 主动消息 | Bot 级 + 群级开关；关闭后主动发送返回 40040，被动回复不受影响 |
 | 媒体 | `file_type` 1/2/3、url / multipart / base64 `file_data` / 分片上传（prepare → part → finish）、内容哈希下载 |
 | 事件 | WebSocket 与 Webhook 双投递、Ed25519 握手、事件溯源 |
 | 可观测 | 双向 HTTP/WS 帧、事件流、限流拒绝、吞吐、DB 大小、覆盖率实时统计 |
 | Agent | CLI（`--json` / 稳定退出码）、MCP stdio（10 个工具）、10 个 YAML 场景 + JUnit/TAP |
-| GUI | Electron 桌面 + 浏览器预览：状态/配置/聊天/调试器/设置，规则引擎、私聊 Bot、账号切换 |
-| 覆盖率 | 31 条端点：30 已实现（27 full + 3 partial），1 stub |
+| GUI | Electron 桌面 + 浏览器预览：状态/配置/聊天/频道/调试器/设置，规则引擎、群管理、频道角色与私信、私聊 Bot、账号切换 |
+| 覆盖率 | 53 条端点：53 已实现（50 full + 3 partial），0 stub |
 
 实时覆盖率：`GET /_mqs/contract`，或 [docs/COVERAGE.md](./docs/COVERAGE.md)（`mqs contract export` 生成）。
 
@@ -130,7 +135,7 @@ tests/           pytest（契约/鉴权/网关/消息/限流/媒体/频道/场�
 
 ```bash
 # 后端
-.venv/bin/pytest        # 90 项
+.venv/bin/pytest        # 106 项
 .venv/bin/ruff check src tests
 
 # 前端
@@ -152,7 +157,7 @@ mqs contract export
 ## 已知未做
 
 钥匙串存储、`--record` 可重放 fixture、Koishi/NoneBot/qq-bot-sdk 兼容矩阵、
-频道角色权限位判定。详见 [PLAN.md](./PLAN.md) §12.6。
+频道角色权限位判定、论坛/音视频/日程/公告等频道内容接口。详见 [PLAN.md](./PLAN.md) §13.5。
 
 ## 许可证
 

@@ -6,6 +6,8 @@ import httpx
 
 
 async def _send_user(mqs, content: str = "hello", at_bots=None) -> dict:
+    if at_bots is None:
+        at_bots = ["10000"]
     async with httpx.AsyncClient(base_url=mqs.control_base, headers=mqs.headers) as client:
         response = await client.post(
             "/_mqs/chat/send",

@@ -9,13 +9,19 @@ const messages = ref<any[]>([])
 const text = ref('')
 const replyTo = ref<any>(null)
 const selectedBots = ref<string[]>([])
-const noAt = ref(false)
 const currentUserId = ref('')
 const members = ref<any[]>([])
 const addMemberId = ref('')
 const hud = ref('')
 const loading = ref(false)
 const messagePane = ref<HTMLElement | null>(null)
+const pendingAttachments = ref<any[]>([])
+const fileInput = ref<HTMLInputElement | null>(null)
+const uploading = ref(false)
+const groupInfo = ref<any>(null)
+const botState = ref<any>(null)
+const blacklist = ref<any[]>([])
+const joinRequests = ref<any[]>([])
 
 const newGroupModal = ref(false)
 const groupForm = reactive({ name: '', members: 5, bot_ids: [] as string[] })
@@ -48,11 +54,13 @@ const visibleConversations = computed(() =>
 const isMember = computed(() => {
   if (dmTarget.value) return true
   const conv = activeConversation.value
-  if (!conv || conv.type !== 'group') return false
+  if (!conv) return false
+  if (conv.type === 'dms') return true
+  if (conv.type !== 'group') return false
   return (conv.member_ids || []).includes(currentUserId.value)
 })
 const canSend = computed(
-  () => !!activeConversationId.value && !!currentUserId.value && !loading.value && isMember.value,
+  () => !!activeConversationId.value && !!currentUserId.value && !loading.value && !uploading.value && isMember.value,
 )
 const nonMembers = computed(() => {
   if (!activeGroup.value) return []
@@ -94,10 +102,13 @@ async function selectConversation(id: string) {
   dmTarget.value = null
   currentId.value = id
   selectedBots.value = []
-  noAt.value = false
   replyTo.value = null
+  pendingAttachments.value = []
   await loadMessages(id)
-  if (activeGroup.value) await loadMembers(activeGroup.value.id)
+  if (activeGroup.value) {
+    await loadMembers(activeGroup.value.id)
+    await loadGroupManagement(activeGroup.value.id)
+  }
 }
 
 async function startDm(botId: string) {
@@ -105,6 +116,7 @@ async function startDm(botId: string) {
   currentId.value = ''
   selectedBots.value = [botId]
   replyTo.value = null
+  pendingAttachments.value = []
   await loadMessages(activeConversationId.value)
 }
 
@@ -146,18 +158,28 @@ async function scrollToBottom() {
 
 async function send() {
   const content = text.value.trim()
-  if (!content || !canSend.value) return
+  if ((!content && !pendingAttachments.value.length) || !canSend.value) return
   const conversation = activeConversationId.value
   try {
-    await api.post('/_mqs/chat/send', {
-      as_user: currentUserId.value,
-      conversation_id: conversation,
-      content,
-      at_bots: noAt.value ? [] : selectedBots.value.length ? selectedBots.value : null,
-      reply_to: replyTo.value?.msg_id || null,
-    })
+    if (activeConversation.value?.type === 'dms') {
+      await api.post(`/_mqs/dms/${activeConversation.value.dms_guild_id}/messages`, {
+        as_user: currentUserId.value,
+        content,
+        attachments: pendingAttachments.value,
+      })
+    } else {
+      await api.post('/_mqs/chat/send', {
+        as_user: currentUserId.value,
+        conversation_id: conversation,
+        content,
+        at_bots: selectedBots.value.length ? selectedBots.value : [],
+        reply_to: replyTo.value?.msg_id || null,
+        attachments: pendingAttachments.value,
+      })
+    }
     text.value = ''
     replyTo.value = null
+    pendingAttachments.value = []
     await loadMessages(conversation)
     await refreshWorld()
     await refreshStatus()
@@ -194,15 +216,157 @@ function switchAccount(id: string) {
 }
 
 function toggleBot(id: string) {
-  noAt.value = false
   const index = selectedBots.value.indexOf(id)
   if (index >= 0) selectedBots.value.splice(index, 1)
   else selectedBots.value.push(id)
 }
 
-function toggleNoAt() {
-  noAt.value = !noAt.value
-  if (noAt.value) selectedBots.value = []
+async function pickFiles() {
+  fileInput.value?.click()
+}
+
+async function onFilePicked(event: Event) {
+  const input = event.target as HTMLInputElement
+  if (input.files) await uploadFiles(Array.from(input.files))
+  input.value = ''
+}
+
+async function uploadFiles(files: File[]) {
+  const media = files.filter((file) => file.type.startsWith('image/') || file.type.startsWith('video/'))
+  if (!media.length) return
+  uploading.value = true
+  try {
+    for (const file of media) {
+      const uploaded = await api.upload<any>('/_mqs/media', file)
+      pendingAttachments.value.push(uploaded)
+    }
+  } catch (error) {
+    toast(error instanceof Error ? error.message : String(error))
+  } finally {
+    uploading.value = false
+  }
+}
+
+function onPaste(event: ClipboardEvent) {
+  const files: File[] = []
+  for (const item of Array.from(event.clipboardData?.items || [])) {
+    if (item.kind === 'file') {
+      const file = item.getAsFile()
+      if (file) files.push(file)
+    }
+  }
+  if (files.length) {
+    event.preventDefault()
+    uploadFiles(files)
+  }
+}
+
+function onDrop(event: DragEvent) {
+  const files = Array.from(event.dataTransfer?.files || [])
+  if (files.length) {
+    event.preventDefault()
+    uploadFiles(files)
+  }
+}
+
+function removeAttachment(index: number) {
+  pendingAttachments.value.splice(index, 1)
+}
+
+async function loadGroupManagement(groupId: string) {
+  try {
+    const [info, state, black, requests] = await Promise.all([
+      api.get<any>(`/_mqs/groups/${groupId}/info`),
+      api.get<any>(`/_mqs/groups/${groupId}/bot-state`),
+      api.get<any[]>(`/_mqs/groups/${groupId}/blacklist`),
+      api.get<any[]>(`/_mqs/groups/${groupId}/join-requests`),
+    ])
+    groupInfo.value = info
+    botState.value = state
+    blacklist.value = black
+    joinRequests.value = requests
+  } catch {
+    groupInfo.value = null
+    botState.value = null
+    blacklist.value = []
+    joinRequests.value = []
+  }
+}
+
+async function muteMember(userId: string, seconds: number) {
+  if (!activeGroup.value) return
+  try {
+    await api.patch(`/_mqs/groups/${activeGroup.value.id}/members/${userId}`, { mute_seconds: seconds })
+    await loadMembers(activeGroup.value.id)
+    toast(seconds ? '已禁言' : '已解除禁言')
+  } catch (error) {
+    toast(error instanceof Error ? error.message : String(error))
+  }
+}
+
+async function toggleGroupProactive() {
+  if (!activeGroup.value || !botState.value) return
+  const bot = groupBots.value[0]
+  if (!bot) return
+  try {
+    botState.value = await api.patch(`/_mqs/groups/${activeGroup.value.id}/bots/${bot.id}`, {
+      allow_proactive_msg: !botState.value.allow_proactive_msg,
+    })
+    toast(botState.value.allow_proactive_msg ? '已允许主动消息' : '已关闭主动消息')
+  } catch (error) {
+    toast(error instanceof Error ? error.message : String(error))
+  }
+}
+
+async function addBlacklist(userId: string) {
+  if (!activeGroup.value || !userId) return
+  try {
+    await api.post(`/_mqs/groups/${activeGroup.value.id}/blacklist`, { user_id: userId, op: 'add' })
+    await loadGroupManagement(activeGroup.value.id)
+    toast('已加入黑名单')
+  } catch (error) {
+    toast(error instanceof Error ? error.message : String(error))
+  }
+}
+
+async function removeBlacklist(userId: string) {
+  if (!activeGroup.value) return
+  try {
+    await api.post(`/_mqs/groups/${activeGroup.value.id}/blacklist`, { user_id: userId, op: 'del' })
+    await loadGroupManagement(activeGroup.value.id)
+  } catch (error) {
+    toast(error instanceof Error ? error.message : String(error))
+  }
+}
+
+async function decideJoinRequest(id: string, op: 'approve' | 'decline') {
+  if (!activeGroup.value) return
+  try {
+    await api.post(`/_mqs/groups/${activeGroup.value.id}/join-requests/${id}/decide`, {
+      op,
+      add_to_blacklist: op === 'decline',
+    })
+    await loadGroupManagement(activeGroup.value.id)
+    await loadMembers(activeGroup.value.id)
+    await refreshWorld()
+    toast(op === 'approve' ? '已通过入群申请' : '已拒绝入群申请')
+  } catch (error) {
+    toast(error instanceof Error ? error.message : String(error))
+  }
+}
+
+async function simulateJoinRequest() {
+  if (!activeGroup.value || !nonMembers.value.length) return
+  try {
+    await api.post(`/_mqs/groups/${activeGroup.value.id}/join-requests`, {
+      user_id: nonMembers.value[0].id,
+      verify_message: '我想加入这个群',
+    })
+    await loadGroupManagement(activeGroup.value.id)
+    toast('已生成入群申请')
+  } catch (error) {
+    toast(error instanceof Error ? error.message : String(error))
+  }
 }
 
 function quote(message: any) {
@@ -492,28 +656,31 @@ function isImage(att: any): boolean {
             >
               {{ bot.name }}
             </button>
-            <button
-              v-if="groupBots.length"
-              class="btn small"
-              :class="noAt ? 'primary' : 'ghost'"
-              title="发送普通群消息，不唤醒任何 Bot"
-              @click="toggleNoAt"
-            >
-              不 @ Bot
-            </button>
             <span v-if="!groupBots.length" class="small faint">（此会话没有 Bot）</span>
-            <span v-if="noAt" class="small faint">普通群消息 · Bot 不会收到</span>
-            <span v-else-if="groupBots.length && !selectedBots.length" class="small faint">默认按设置自动 @</span>
+            <span v-if="groupBots.length && !selectedBots.length" class="small faint">未选择 Bot：不 @ 任何 Bot（普通群消息）</span>
+            <span v-else-if="selectedBots.length" class="small faint">将 @ 选中的 Bot</span>
           </template>
         </div>
-        <div class="composer-row">
+        <div v-if="pendingAttachments.length" class="row wrap" style="margin-bottom: 8px; gap: 8px">
+          <div v-for="(att, index) in pendingAttachments" :key="att.hash" class="attachment-chip">
+            <img v-if="isImage(att)" :src="att.url" alt="" />
+            <span v-else class="small">{{ att.filename }}</span>
+            <button class="btn small ghost" title="移除" @click="removeAttachment(index)">×</button>
+          </div>
+        </div>
+        <div class="composer-row" @drop.prevent="onDrop" @dragover.prevent>
+          <input ref="fileInput" type="file" accept="image/*" multiple style="display: none" @change="onFilePicked" />
+          <button class="btn small" :disabled="!canSend || uploading" title="上传图片" @click="pickFiles">🖼</button>
           <textarea
             v-model="text"
             class="textarea"
-            :placeholder="dmTarget ? '私聊消息，Enter 发送，Shift+Enter 换行' : '群消息，Enter 发送，Shift+Enter 换行'"
+            :placeholder="dmTarget ? '私聊消息，Enter 发送；可粘贴/拖入图片' : '群消息，Enter 发送；可粘贴/拖入图片'"
             @keydown.enter.exact.prevent="send"
+            @paste="onPaste"
           ></textarea>
-          <button class="btn primary" :disabled="!canSend || !text.trim()" @click="send">发送</button>
+          <button class="btn primary" :disabled="!canSend || (!text.trim() && !pendingAttachments.length)" @click="send">
+            {{ uploading ? '上传中…' : '发送' }}
+          </button>
         </div>
       </div>
     </section>
@@ -548,6 +715,28 @@ function isImage(att: any): boolean {
       </div>
 
       <div v-if="activeGroup">
+        <div class="panel-section-title">群管理</div>
+        <div v-if="groupInfo" class="small faint" style="margin-bottom: 8px">
+          {{ groupInfo.group_name }} · {{ groupInfo.group_member_num }} 人
+          <div v-if="groupInfo.group_finger_memo">{{ groupInfo.group_finger_memo }}</div>
+        </div>
+        <div class="row wrap" style="margin-bottom: 8px">
+          <button class="btn small" @click="toggleGroupProactive">
+            {{ botState?.allow_proactive_msg ? '主动消息：开' : '主动消息：关' }}
+          </button>
+          <button class="btn small" @click="simulateJoinRequest">模拟入群申请</button>
+        </div>
+        <div v-if="joinRequests.length" class="small" style="margin-bottom: 8px">
+          <div class="faint">入群申请 · {{ joinRequests.length }}</div>
+          <div v-for="request in joinRequests" :key="request.id" class="member-row">
+            <span class="grow">{{ request.nickname }}</span>
+            <button class="btn small primary" @click="decideJoinRequest(request.id, 'approve')">通过</button>
+            <button class="btn small danger" @click="decideJoinRequest(request.id, 'decline')">拒绝</button>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="activeGroup">
         <div class="panel-section-title">群成员 · {{ members.length }}</div>
         <div class="row" style="margin-bottom: 8px">
           <select v-model="addMemberId" class="select small">
@@ -559,8 +748,25 @@ function isImage(att: any): boolean {
           <img class="avatar sm" :src="member.avatar" alt="" />
           <span class="grow" style="overflow: hidden; text-overflow: ellipsis">{{ member.nickname }}</span>
           <span class="tag">{{ member.role }}</span>
+          <button class="btn small ghost" title="禁言 10 分钟" @click="muteMember(member.user_id, 600)">禁言</button>
+          <button class="btn small ghost" title="解除禁言" @click="muteMember(member.user_id, 0)">解</button>
           <button class="btn small ghost" @click="removeMember(member.user_id)">×</button>
         </div>
+      </div>
+
+      <div v-if="activeGroup">
+        <div class="panel-section-title">群黑名单 · {{ blacklist.length }}</div>
+        <div class="row" style="margin-bottom: 8px">
+          <select v-model="addMemberId" class="select small">
+            <option v-for="user in nonMembers" :key="user.id" :value="user.id">{{ user.nickname }}</option>
+          </select>
+          <button class="btn small" :disabled="!addMemberId" @click="addBlacklist(addMemberId)">拉黑</button>
+        </div>
+        <div v-for="item in blacklist" :key="item.user_id" class="member-row">
+          <span class="grow">{{ item.nickname }}</span>
+          <button class="btn small ghost" @click="removeBlacklist(item.user_id)">解除</button>
+        </div>
+        <div v-if="!blacklist.length" class="small faint">暂无黑名单</div>
       </div>
 
       <div v-if="activeGroup">

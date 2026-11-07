@@ -43,6 +43,9 @@ class GroupPatch(BaseModel):
     name: str | None = None
     owner_id: str | None = None
     join_policy: str | None = None
+    finger_memo: str | None = None
+    class_text: str | None = None
+    tags: list[str] | None = None
 
 
 class MemberAdd(BaseModel):
@@ -72,6 +75,7 @@ class BotPatch(BaseModel):
     scopes: list[str] | None = None
     delivery: Literal["ws", "webhook"] | None = None
     whitelisted: bool | None = None
+    allow_proactive_msg: bool | None = None
 
 
 class ChatSend(BaseModel):
@@ -85,6 +89,26 @@ class ChatSend(BaseModel):
     mentions: list[str] = Field(default_factory=list)
     at_bots: list[str] | None = None
     reply_to: str | None = None
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class GroupBotPatch(BaseModel):
+    allow_proactive_msg: bool | None = None
+    recv_msg_setting: Literal["all", "only_mention", "mention_and_context"] | None = None
+
+
+class JoinRequestCreate(BaseModel):
+    user_id: str
+    verify_message: str = ""
+    source: Literal["self_apply", "invited"] = "self_apply"
+    invited_by: str = ""
+
+
+class JoinRequestDecision(BaseModel):
+    op: Literal["approve", "decline"]
+    join_request_id: str = ""
+    reject_reason: str = ""
+    add_to_blacklist: bool = False
 
 
 class KeyboardClick(BaseModel):

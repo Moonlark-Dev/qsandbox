@@ -339,10 +339,12 @@ steps:
       as: alice
       to: room
       text: 第一条
+      at_bots: ["10000"]
   - send:
       as: alice
       to: room
       text: 引用第一条
+      at_bots: ["10000"]
       reply_to: "{{last_message_id}}"
   - expect_event:
       type: GROUP_AT_MESSAGE_CREATE

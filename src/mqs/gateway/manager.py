@@ -41,6 +41,8 @@ INTENT_BY_EVENT: dict[str, int] = {
     "PUBLIC_MESSAGE_DELETE": 1 << 30,
     "MESSAGE_CREATE": 1 << 9,
     "MESSAGE_DELETE": 1 << 9,
+    "DIRECT_MESSAGE_CREATE": 1 << 12,
+    "DIRECT_MESSAGE_DELETE": 1 << 12,
     "GUILD_CREATE": 1 << 0,
     "GUILD_UPDATE": 1 << 0,
     "GUILD_DELETE": 1 << 0,

@@ -22,7 +22,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "require_online": True,
     "feature.whitelist": True,
     "feature.expose": "all",
-    "chat.auto_at_bot": True,
+    "chat.auto_at_bot": False,
     "active_quota_per_day": 1000,
     "channel_active_quota_per_day": 20,
     "channel_active_channel_limit": 2,
@@ -30,6 +30,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "passive_reply_limit_c2c": 4,
     "passive_window_group_ms": 5 * 60 * 1000,
     "passive_reply_limit_group": 5,
+    "active_c2c_require_friend": False,
+    "dms_active_user_limit": 2,
+    "dms_active_bot_limit": 200,
     "language": "zh-CN",
     "theme": "auto",
     "telemetry": False,
@@ -80,13 +83,22 @@ class Database:
             await self._seed_settings()
             return
         if version == 0:
+            # schema.sql is the L0+L1+L2 baseline (it already contains v2/v3
+            # structures); only the newest delta has to be applied on top.
             await self.conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+            version = 3
         if version == 1:
             migration = Path(__file__).with_name("schema_v2.sql")
             await self.conn.executescript(migration.read_text(encoding="utf-8"))
+            version = 2
         if version == 2:
             migration = Path(__file__).with_name("schema_v3.sql")
             await self.conn.executescript(migration.read_text(encoding="utf-8"))
+            version = 3
+        if version == 3:
+            migration = Path(__file__).with_name("schema_v4.sql")
+            await self.conn.executescript(migration.read_text(encoding="utf-8"))
+            version = 4
         await self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         await self._seed_settings()
 

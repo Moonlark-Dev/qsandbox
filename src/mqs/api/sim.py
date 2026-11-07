@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from ..config import ProcessConfig
 from ..domain.world import World
 from ..errors import InvalidParam
-from ..ids import avatar_svg, new_msg_id
+from ..ids import avatar_svg
 from ..models import AppAccessTokenRequest, MediaUploadRequest, MessageSendRequest
 from .common import (
     SimLogMiddleware,
@@ -135,8 +135,14 @@ async def _require_guild_member(world: World, bot_id: str, guild_id: str) -> Non
 
 
 @router.post("/users/@me/dms")
-async def create_dm(bot: dict = Depends(require_bot)) -> dict:
-    return {"guild_id": "mqs-stub-guild", "channel_id": new_msg_id("MQS_DM"), "create_time": 0}
+async def create_dm(request: Request, bot: dict = Depends(require_bot)) -> dict:
+    world: World = get_world(request)
+    body = await request.json()
+    recipient = str(body.get("recipient_id") or "")
+    source = str(body.get("source_guild_id") or "")
+    if not recipient or not source:
+        raise InvalidParam("recipient_id and source_guild_id are required")
+    return await world.create_dms(bot["id"], recipient, source)
 
 
 def _attach_rate_headers(response: Response, result: dict) -> dict:
@@ -504,6 +510,7 @@ async def guild_roles(guild_id: str, request: Request, bot: dict = Depends(requi
     await _require_guild_member(world, bot["id"], guild_id)
     roles = await world.list_guild_roles(guild_id)
     return {
+        "guild_id": guild_id,
         "roles": [
             {
                 "id": role["id"],
@@ -511,11 +518,13 @@ async def guild_roles(guild_id: str, request: Request, bot: dict = Depends(requi
                 "color": role["color"],
                 "hoist": role["hoist"],
                 "permissions": role["permissions"],
+                "number": role.get("number", 0),
+                "member_limit": role.get("member_limit", 2000),
+                "member_ids": role.get("member_ids", []),
             }
             for role in roles
         ],
-        "role_members": [],
-        "role_members_num": 0,
+        "role_num_limit": "30",
     }
 
 
@@ -593,6 +602,224 @@ async def channel_send(
         bot["id"], channel_id, payload.model_dump(exclude_none=True)
     )
     return _attach_rate_headers(response, result)
+
+
+# ---------------------------------------------------------------------------
+# group management (invite-only / admin APIs)
+# ---------------------------------------------------------------------------
+
+async def _group_entity(world: World, bot_id: str, group_openid: str) -> str:
+    mapping = await world.resolve_openid(bot_id, group_openid)
+    if mapping["kind"] != "group":
+        raise InvalidParam("openid is not a group openid")
+    return mapping["entity_id"]
+
+
+@router.get("/v2/groups/{group_openid}/info")
+async def group_info(group_openid: str, request: Request, bot: dict = Depends(require_whitelisted_bot)) -> dict:
+    world: World = get_world(request)
+    group_id = await _group_entity(world, bot["id"], group_openid)
+    return await world.group_info(group_id, bot["id"])
+
+
+@router.get("/v2/groups/{group_openid}/bot_state")
+async def group_bot_state(group_openid: str, request: Request, bot: dict = Depends(require_whitelisted_bot)) -> dict:
+    world: World = get_world(request)
+    group_id = await _group_entity(world, bot["id"], group_openid)
+    return await world.group_bot_state(group_id, bot["id"])
+
+
+@router.get("/v2/groups/{group_openid}/restrict_chat_setting")
+async def group_restrict_get(group_openid: str, request: Request, bot: dict = Depends(require_whitelisted_bot)) -> dict:
+    world: World = get_world(request)
+    group_id = await _group_entity(world, bot["id"], group_openid)
+    return await world.group_mute_settings(group_id, bot["id"])
+
+
+@router.post("/v2/groups/{group_openid}/restrict_chat_setting")
+async def group_restrict_set(group_openid: str, request: Request, bot: dict = Depends(require_whitelisted_bot)) -> dict:
+    world: World = get_world(request)
+    group_id = await _group_entity(world, bot["id"], group_openid)
+    body = await request.json()
+    return await world.set_group_mute(group_id, bot["id"], body.get("members") or [])
+
+
+@router.get("/v2/groups/{group_openid}/member_blacklist")
+async def group_blacklist_get(
+    group_openid: str, request: Request, bot: dict = Depends(require_whitelisted_bot),
+    cursor: str = "", limit: int = 20,
+) -> dict:
+    world: World = get_world(request)
+    group_id = await _group_entity(world, bot["id"], group_openid)
+    return await world.group_blacklist_page(group_id, bot["id"], cursor=cursor, limit=limit)
+
+
+@router.post("/v2/groups/{group_openid}/member_blacklist")
+async def group_blacklist_post(
+    group_openid: str, request: Request, bot: dict = Depends(require_whitelisted_bot)
+) -> dict:
+    world: World = get_world(request)
+    group_id = await _group_entity(world, bot["id"], group_openid)
+    body = await request.json()
+    return await world.update_group_blacklist(
+        group_id, bot["id"], str(body.get("op") or ""), body.get("member_openids") or []
+    )
+
+
+@router.post("/v2/groups/{group_openid}/batch_remove_members")
+async def group_batch_remove(
+    group_openid: str, request: Request, bot: dict = Depends(require_whitelisted_bot)
+) -> dict:
+    world: World = get_world(request)
+    group_id = await _group_entity(world, bot["id"], group_openid)
+    body = await request.json()
+    return await world.batch_remove_group_members(
+        group_id, bot["id"], body.get("member_openids") or [],
+        bool(body.get("add_to_member_blacklist")),
+    )
+
+
+@router.get("/v2/groups/{group_openid}/join_request_list")
+async def group_join_request_list(
+    group_openid: str, request: Request, bot: dict = Depends(require_whitelisted_bot),
+    cursor: str = "", limit: int = 20,
+) -> dict:
+    world: World = get_world(request)
+    group_id = await _group_entity(world, bot["id"], group_openid)
+    return await world.join_requests_page(group_id, bot["id"], cursor=cursor, limit=limit)
+
+
+@router.post("/v2/groups/{group_openid}/approval_join_request/{member_openid}")
+async def group_join_request_approve(
+    group_openid: str, member_openid: str, request: Request,
+    bot: dict = Depends(require_whitelisted_bot),
+) -> dict:
+    world: World = get_world(request)
+    group_id = await _group_entity(world, bot["id"], group_openid)
+    body = await request.json()
+    return await world.approve_join_request(
+        group_id, bot["id"], member_openid,
+        op=str(body.get("op") or ""),
+        join_request_id=str(body.get("join_request_id") or ""),
+        reject_reason=str(body.get("reject_reason") or ""),
+        add_to_blacklist=bool(body.get("add_to_member_blacklist")),
+    )
+
+
+# ---------------------------------------------------------------------------
+# channel writes, roles and members
+# ---------------------------------------------------------------------------
+
+@router.post("/guilds/{guild_id}/channels")
+async def channel_create(guild_id: str, request: Request, bot: dict = Depends(require_bot)) -> dict:
+    world: World = get_world(request)
+    return await world.create_channel(guild_id, bot["id"], await request.json())
+
+
+@router.patch("/channels/{channel_id}")
+async def channel_patch(channel_id: str, request: Request, bot: dict = Depends(require_bot)) -> dict:
+    world: World = get_world(request)
+    return await world.update_channel(channel_id, bot["id"], await request.json())
+
+
+@router.delete("/channels/{channel_id}")
+async def channel_delete(channel_id: str, request: Request, bot: dict = Depends(require_bot)) -> Response:
+    world: World = get_world(request)
+    await world.delete_channel(channel_id, bot["id"])
+    return Response(status_code=204)
+
+
+@router.post("/guilds/{guild_id}/roles")
+async def guild_role_create(guild_id: str, request: Request, bot: dict = Depends(require_bot)) -> dict:
+    world: World = get_world(request)
+    return await world.create_guild_role(guild_id, bot["id"], await request.json())
+
+
+@router.patch("/guilds/{guild_id}/roles/{role_id}")
+async def guild_role_patch(
+    guild_id: str, role_id: str, request: Request, bot: dict = Depends(require_bot)
+) -> dict:
+    world: World = get_world(request)
+    return await world.update_guild_role(guild_id, bot["id"], role_id, await request.json())
+
+
+@router.delete("/guilds/{guild_id}/roles/{role_id}")
+async def guild_role_delete(
+    guild_id: str, role_id: str, request: Request, bot: dict = Depends(require_bot)
+) -> Response:
+    world: World = get_world(request)
+    await world.delete_guild_role(guild_id, bot["id"], role_id)
+    return Response(status_code=204)
+
+
+@router.put("/guilds/{guild_id}/members/{user_id}/roles/{role_id}")
+async def guild_member_role_put(
+    guild_id: str, user_id: str, role_id: str, request: Request, bot: dict = Depends(require_bot)
+) -> Response:
+    world: World = get_world(request)
+    await world.assign_guild_role(guild_id, bot["id"], user_id, role_id)
+    return Response(status_code=204)
+
+
+@router.delete("/guilds/{guild_id}/members/{user_id}/roles/{role_id}")
+async def guild_member_role_delete(
+    guild_id: str, user_id: str, role_id: str, request: Request, bot: dict = Depends(require_bot)
+) -> Response:
+    world: World = get_world(request)
+    await world.unassign_guild_role(guild_id, bot["id"], user_id, role_id)
+    return Response(status_code=204)
+
+
+@router.delete("/guilds/{guild_id}/members/{user_id}")
+async def guild_member_delete(
+    guild_id: str, user_id: str, request: Request, bot: dict = Depends(require_bot)
+) -> Response:
+    world: World = get_world(request)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    await world.remove_guild_member(guild_id, bot["id"], user_id, body)
+    return Response(status_code=204)
+
+
+@router.patch("/guilds/{guild_id}/members/{user_id}/mute")
+async def guild_member_mute(
+    guild_id: str, user_id: str, request: Request, bot: dict = Depends(require_bot)
+) -> Response:
+    world: World = get_world(request)
+    await world.set_guild_member_mute(guild_id, bot["id"], user_id, await request.json())
+    return Response(status_code=204)
+
+
+@router.patch("/guilds/{guild_id}/mute")
+async def guild_mute(guild_id: str, request: Request, bot: dict = Depends(require_bot)) -> Response:
+    world: World = get_world(request)
+    await world.set_guild_mute(guild_id, bot["id"], await request.json())
+    return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# channel direct messages (DMS)
+# ---------------------------------------------------------------------------
+
+@router.post("/dms/{guild_id}/messages")
+async def dms_send(
+    guild_id: str, payload: MessageSendRequest, request: Request, response: Response,
+    bot: dict = Depends(require_bot),
+) -> dict:
+    world: World = get_world(request)
+    result = await world.send_dms(bot["id"], guild_id, payload.model_dump(exclude_none=True))
+    return _attach_rate_headers(response, result)
+
+
+@router.delete("/dms/{guild_id}/messages/{message_id}")
+async def dms_recall(
+    guild_id: str, message_id: str, request: Request, bot: dict = Depends(require_bot)
+) -> Response:
+    world: World = get_world(request)
+    await world.recall_dms(bot["id"], guild_id, message_id)
+    return Response(status_code=204)
 
 
 # ---------------------------------------------------------------------------

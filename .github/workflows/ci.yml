@@ -4,6 +4,14 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   python:
@@ -26,8 +34,12 @@ jobs:
         run: pytest -q
       - name: Contract artifacts are current
         run: |
-          mqs contract export --out /tmp/coverage.md --types /tmp/api.ts
-          grep -q "接口覆盖率" /tmp/coverage.md
+          mqs contract export --out docs/COVERAGE.md --types web/src/types/api.ts
+          git diff --exit-code docs/COVERAGE.md web/src/types/api.ts
+      - name: CLI doctor
+        run: |
+          MQS_HOME=/tmp/mqs-doctor mqs doctor --profile ci || true
+          MQS_HOME=/tmp/mqs-doctor mqs status --profile ci || true
 
   web:
     runs-on: ubuntu-latest

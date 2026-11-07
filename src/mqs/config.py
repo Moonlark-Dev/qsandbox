@@ -21,7 +21,7 @@ DB_FILE = "db.sqlite"
 MEDIA_DIR = "media"
 LOCK_FILE = "profile.lock"
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class ProfileLocked(RuntimeError):

@@ -392,3 +392,79 @@ v0.1 已落地并通过验收：
 | 频道权限位（角色 → 细粒度 permissions） | 角色结构有了，权限判定未做 |
 | Nuitka sidecar | 用 PyInstaller 替代 |
 | Tauri 桌面壳 | 按用户决定改为 Electron |
+
+---
+
+## 13. v0.3 变更（2026-11-07 第三轮）
+
+### 13.1 默认不 @ 任何 Bot
+
+聊天页不再有“默认自动 @ 群内所有 Bot”的隐式行为：
+
+- 未选择任何 Bot 时，前端显式发送 `at_bots: []`，消息只进入群会话，不产生 `GROUP_AT_MESSAGE_CREATE`；
+- 选中 Bot 才显式 @，按钮指令仍通过 `implicit_bots` 只投递给发按钮的 Bot、不加 `<@!...>` 前缀；
+- `chat.auto_at_bot` 保留为调试开关，默认 `false`；CLI/MCP/场景未显式给 `at_bots` 时同样不 @。
+
+### 13.2 群管理（5 组接口）
+
+| 接口 | 行为 |
+|---|---|
+| `GET /v2/groups/{group_openid}/info` | 群名、简介、分类、标签、人数（30 QPM） |
+| `GET /v2/groups/{group_openid}/bot_state` | 机器人群内状态、`allow_proactive_msg`、`recv_msg_setting` |
+| `GET/POST /v2/groups/{group_openid}/restrict_chat_setting` | 查询/设置成员禁言，`add/update/del`，单次 20 人，最长 30 天 |
+| `GET/POST /v2/groups/{group_openid}/member_blacklist` | 黑名单查询与 add/del；仍在群内时加入失败 |
+| `GET /v2/groups/{group_openid}/join_request_list` + `POST .../approval_join_request/{member_openid}` | 入群申请列表、approve/decline、拒绝时可直接拉黑 |
+| `POST /v2/groups/{group_openid}/batch_remove_members` | 批量移除，可选同时拉黑 |
+
+所有群管理接口与群成员接口一致，走“内邀白名单”校验（`11253`）。
+
+### 13.3 频道写操作 + 角色成员
+
+- 子频道：`POST /guilds/{guild_id}/channels`、`PATCH/DELETE /channels/{channel_id}`，分别触发
+  `CHANNEL_CREATE/UPDATE/DELETE`；
+- 身份组：`GET/POST /guilds/{guild_id}/roles`、`PATCH/DELETE .../roles/{role_id}`，
+  `PUT/DELETE /guilds/{guild_id}/members/{user_id}/roles/{role_id}`；角色列表返回
+  `number` / `member_ids` / `member_limit`；
+- 成员：`DELETE /guilds/{guild_id}/members/{user_id}`、`PATCH .../members/{user_id}/mute`、
+  `PATCH /guilds/{guild_id}/mute`，触发 `GUILD_MEMBER_UPDATE/REMOVE`。
+
+### 13.4 频道私信 + 好友 + 主动消息
+
+- `POST /users/@me/dms` 要求 Bot 与用户在同一频道，返回 `{guild_id, channel_id, create_time}`；
+- `POST /dms/{guild_id}/messages` / `DELETE .../{message_id}`，被动不限条数；主动
+  2 条/天/用户、200 条/天/Bot；
+- 用户侧控制 API 发私信产生 `DIRECT_MESSAGE_CREATE`（intent `1<<12`）；
+- 好友关系用 `POST/DELETE /_mqs/bots/{bot_id}/friends/{user_id}` 维护，触发
+  `FRIEND_ADD` / `FRIEND_DEL`；`active_c2c_require_friend` 可开启“主动单聊需好友”；
+- 主动消息开关：Bot 级 `allow_proactive_msg` + 群级覆盖；关闭后群/单聊/频道/频道私信的
+  主动发送统一返回 `40040`，被动回复不检查。
+
+### 13.5 用户富媒体与 GUI
+
+- 控制 API `POST /_mqs/media` 接收 multipart 图片/视频，落内容哈希并返回 `{hash,url}`；
+- `ChatSend.attachments` 支持群/单聊/频道/私信；正文为空且有附件时自动 `msg_type=7`；
+- 聊天页支持文件选择、剪贴板粘贴图片、拖拽上传，发送前可预览/删除；
+- 新增“频道”页：子频道、身份组、成员禁言/踢出、全员禁言、频道私信、好友关系、主动消息开关；
+- 群聊右栏新增群管理：群信息、成员禁言/解禁、黑名单、入群申请审批、群级主动消息开关。
+
+### 13.6 测试与覆盖率
+
+- 测试：**106 项全绿**（新增群管理 5、频道/私信/好友 6、富媒体 3）；
+- `ruff check src tests` 干净；
+- 端点：**53 条，53 已实现（50 full + 3 partial），0 stub**；`docs/COVERAGE.md` 与
+  `web/src/types/api.ts` 已重新生成。
+
+### 13.7 仍未完成（诚实清单）
+
+| 项 | 状态 |
+|---|---|
+| 入群自动审批策略（`join_approval_strategy` 5 条接口） | 未做；仅实现申请列表与人工审批 |
+| 频道内容接口：公告、日程、置顶、论坛、音视频/直播成员 | 未做 |
+| 子频道权限覆盖（`channel_permissions` / 身份组细粒度 permissions） | 未做；身份组结构有，权限判定未做 |
+| 频道成员申请/频道黑名单 | 未做 |
+| 系统钥匙串存 Bot secret / 控制 token | 未做，secret 仍在 SQLite |
+| `--record` 可重放 fixture、`--script x.ts/x.py` 逃生口 | 未做 |
+| Koishi / NoneBot / qq-bot-sdk 兼容矩阵 | 只实测 botpy；nonebot-adapter-qq 仅提供配置 |
+| Webhook Ed25519 真机签名校验 | 仅按公开资料实现握手 |
+| 错误码 40034/40054/40055/40057 真机抓包校正 | 未做，集中表已就位 |
+| Nuitka sidecar / Tauri 桌面壳 | 用 PyInstaller + Electron 替代 |

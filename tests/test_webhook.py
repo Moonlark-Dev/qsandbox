@@ -41,7 +41,7 @@ async def test_webhook_delivery_is_attempted_and_logged(mqs) -> None:
         await client.post("/_mqs/bots/10000/webhook", json={"url": "http://127.0.0.1:9/hook"})
         response = await client.post(
             "/_mqs/chat/send",
-            json={"as_user": await mqs.user_id(), "to": f"group:{await mqs.group_id()}", "content": "webhook"},
+            json={"as_user": await mqs.user_id(), "to": f"group:{await mqs.group_id()}", "content": "webhook", "at_bots": ["10000"]},
         )
         assert response.status_code == 200
     import asyncio

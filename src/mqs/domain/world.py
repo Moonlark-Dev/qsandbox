@@ -33,6 +33,7 @@ from ..ids import (
     openid_for,
     union_openid_for,
 )
+from .community import CommunityMixin
 from .hub import Hub
 from .ratelimit import RateLimiter
 from .webhooks import WebhookDispatcher
@@ -47,7 +48,7 @@ def _rows(rows: Iterable[aiosqlite.Row]) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
-class World:
+class World(CommunityMixin):
     def __init__(self, db: Database, clock: Clock, profile: str, paths: ProfilePaths) -> None:
         self.db = db
         self.clock = clock
@@ -173,6 +174,7 @@ class World:
         except ValueError:
             data["scopes"] = []
         data["whitelisted"] = bool(data.get("whitelisted", 0))
+        data["allow_proactive_msg"] = bool(data.get("allow_proactive_msg", 1))
         data["online"] = bool(self.gateway and self.gateway.is_online(data["id"]))
         return data
 
@@ -190,6 +192,10 @@ class World:
         data["bots"] = [{"id": b["id"], "name": b["name"]} for b in bots]
         data["owner_id"] = owners["user_id"] if owners else None
         data["conversation_id"] = f"group:{gid}"
+        try:
+            data["tags"] = json.loads(data.get("tags") or "[]")
+        except ValueError:
+            data["tags"] = []
         return data
 
     # ------------------------------------------------------------------ users
@@ -381,7 +387,7 @@ class World:
         for key, value in patch.items():
             if value is None:
                 continue
-            if key == "whitelisted":
+            if key in ("whitelisted", "allow_proactive_msg"):
                 value = 1 if value else 0
             fields[key] = json.dumps(value) if key == "scopes" else value
         if fields:
@@ -508,6 +514,8 @@ class World:
     async def update_group(self, group_id: str, patch: dict[str, Any]) -> dict[str, Any]:
         await self.get_group(group_id)
         fields = {k: v for k, v in patch.items() if v is not None}
+        if "tags" in fields:
+            fields["tags"] = json.dumps(list(fields["tags"] or []), ensure_ascii=False)
         if fields:
             cols = ", ".join(f"{k}=?" for k in fields)
             await self.db.execute(f"UPDATE groups SET {cols} WHERE id=?", (*fields.values(), group_id))
@@ -736,8 +744,8 @@ class World:
             for position, (channel_name, channel_type) in enumerate((("大厅", 0), ("闲聊", 0), ("语音房", 2))):
                 cid = f"channel_{gid[-6:]}{position + 1:02d}"
                 await conn.execute(
-                    "INSERT INTO channels(id,guild_id,name,type,position,created_at) VALUES(?,?,?,?,?,?)",
-                    (cid, gid, channel_name, channel_type, position, now),
+                    "INSERT INTO channels(id,guild_id,name,type,position,created_at,owner_id) VALUES(?,?,?,?,?,?,?)",
+                    (cid, gid, channel_name, channel_type, position, now, owner_id or ""),
                 )
             await conn.execute(
                 "INSERT INTO guild_roles(id,guild_id,name,color,hoist,permissions) VALUES(?,?,?,?,?,?)",
@@ -840,7 +848,16 @@ class World:
 
     async def list_guild_roles(self, guild_id: str) -> list[dict[str, Any]]:
         rows = await self.db.fetchall("SELECT * FROM guild_roles WHERE guild_id=? ORDER BY id", (guild_id,))
-        return [dict(r) for r in rows]
+        members = await self.db.fetchall("SELECT user_id, roles FROM guild_members WHERE guild_id=?", (guild_id,))
+        out = []
+        for row in rows:
+            data = dict(row)
+            member_ids = [m["user_id"] for m in members if data["id"] in json.loads(m["roles"] or "[]")]
+            data["number"] = len(member_ids)
+            data["member_limit"] = 2000
+            data["member_ids"] = member_ids
+            out.append(data)
+        return out
 
     def _guild_bot_rows(self, guild_id: str) -> Any:
         return self.db.fetchall(
@@ -881,6 +898,7 @@ class World:
         *,
         mentions: Sequence[str] | None = None,
         msg_type: int = 0,
+        attachments: Sequence[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         channel = await self.get_channel(channel_id)
         guild_id = channel["guild_id"]
@@ -893,6 +911,9 @@ class World:
         await self.ensure_conversation(conversation_id)
         event_id = new_event_id()
         mention_ids = list(dict.fromkeys(mentions or []))
+        attachment_list = list(attachments or [])
+        if attachment_list and not msg_type:
+            msg_type = 7
         deliveries: list[tuple[str, int, dict[str, Any], dict[str, Any]]] = []
         async with self.db.tx() as conn:
             cur = await conn.execute("UPDATE conversations SET last_seq=last_seq+1 WHERE id=?", (conversation_id,))
@@ -910,6 +931,7 @@ class World:
                 "guild_id": guild_id,
                 "timestamp": self.clock.iso(sent_at),
                 "msg_seq": seq,
+                "attachments": attachment_list,
             }
             await conn.execute(
                 "INSERT INTO messages(conversation_id,seq,msg_id,event_id,direction,sender_id,sender_type,bot_id,"
@@ -928,6 +950,7 @@ class World:
                 payload = self._guild_channel_payload(
                     msg_id=msg_id, content=content, channel=channel, user_id=user_id,
                     nickname=member["nickname"] or user_id, sent_at=sent_at, mentions=mention_ids,
+                    attachments=attachments or (),
                 )
                 payload["author"]["bot"] = False
                 event_type = "AT_MESSAGE_CREATE" if bot["id"] in mention_ids else "MESSAGE_CREATE"
@@ -971,6 +994,9 @@ class World:
                 raise PassiveWindowExpired("channel passive reply window (5 minutes) has expired")
             msg_seq = int(body.get("msg_seq") or 1)
         else:
+            bot = await self.bot_by_id(bot_id)
+            if not bot["allow_proactive_msg"]:
+                raise NoPermission("proactive messages are disabled for this bot")
             quota = int(self.setting("channel_active_quota_per_day", 20))
             channel_limit = int(self.setting("channel_active_channel_limit", 2))
             day = self.clock.now().strftime("%Y-%m-%d")
@@ -1072,6 +1098,26 @@ class World:
                     "last_message": await self._last_message(d["id"]),
                 }
             )
+        dms_sessions = await self.db.fetchall("SELECT * FROM dm_sessions ORDER BY created_at DESC")
+        for session in dms_sessions:
+            user = await self.db.fetchone("SELECT * FROM users WHERE id=?", (session["user_id"],))
+            bot = await self.db.fetchone("SELECT * FROM bots WHERE id=?", (session["bot_id"],))
+            if not user or not bot:
+                continue
+            out.append(
+                {
+                    "id": f"dms:{session['dms_guild_id']}",
+                    "type": "dms",
+                    "peer_id": session["user_id"],
+                    "name": f"频道私信 · {user['nickname']} ↔ {bot['name']}",
+                    "avatar": self._avatar(user["id"], user["nickname"], "user"),
+                    "bot_id": session["bot_id"],
+                    "user_id": user["id"],
+                    "channel_id": session["channel_id"],
+                    "dms_guild_id": session["dms_guild_id"],
+                    "last_message": await self._last_message(f"dms:{session['dms_guild_id']}"),
+                }
+            )
         out.sort(key=lambda c: (c.get("last_message") or {}).get("sent_at", 0), reverse=True)
         return out
 
@@ -1112,6 +1158,14 @@ class World:
                 "ON CONFLICT(id) DO NOTHING",
                 (conversation_id, "guild", peer),
             )
+        elif kind == "dms":
+            session = await self.db.fetchone("SELECT * FROM dm_sessions WHERE dms_guild_id=?", (peer,))
+            if session is not None:
+                await self.db.execute(
+                    "INSERT INTO conversations(id,type,peer_id,bot_id,last_seq) VALUES(?,?,?,?,0) "
+                    "ON CONFLICT(id) DO NOTHING",
+                    (conversation_id, "dms", session["user_id"], session["bot_id"]),
+                )
 
     async def resolve_conversation(self, *, to: str | None = None, conversation_id: str | None = None) -> str:
         candidate = conversation_id or to
@@ -1183,7 +1237,8 @@ class World:
         data["sender"] = sender
         data["raw"] = raw
         data["content"] = data.get("content") or ""
-        for key in ("markdown", "keyboard", "ark", "embed", "media", "message_reference", "mentions"):
+        for key in ("markdown", "keyboard", "ark", "embed", "media", "message_reference", "mentions",
+                    "attachments"):
             if key in raw:
                 data[key] = raw[key]
         if "media" in raw and "attachments" not in data:
@@ -1214,6 +1269,7 @@ class World:
         at_bots: Sequence[str] | None = None,
         implicit_bots: Sequence[str] | None = None,
         reply_to: str | None = None,
+        attachments: Sequence[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         await self.ensure_conversation(conversation_id)
         conv = await self.db.fetchone("SELECT * FROM conversations WHERE id=?", (conversation_id,))
@@ -1222,6 +1278,9 @@ class World:
         user = await self.db.fetchone("SELECT * FROM users WHERE id=?", (user_id,))
         if user is None:
             raise InvalidParam(f"user not found: {user_id}")
+        attachment_list = list(attachments or [])
+        if attachment_list and not msg_type:
+            msg_type = 7
 
         if conv["type"] == "group":
             member = await self.db.fetchone(
@@ -1241,7 +1300,7 @@ class World:
                 target_bot_ids = [b for b in at_bots if any(r["id"] == b for r in bot_rows)]
             elif mentions:
                 target_bot_ids = [b for b in mention_ids if any(r["id"] == b for r in bot_rows)]
-            elif self.setting("chat.auto_at_bot", True):
+            elif self.setting("chat.auto_at_bot", False):
                 target_bot_ids = [r["id"] for r in bot_rows]
             else:
                 target_bot_ids = []
@@ -1288,6 +1347,7 @@ class World:
                 "group_id": conv["peer_id"] if conv["type"] == "group" else None,
                 "timestamp": self.clock.iso(sent_at),
                 "msg_seq": seq,
+                "attachments": attachment_list,
             }
             await conn.execute(
                 "INSERT INTO messages(conversation_id,seq,msg_id,event_id,direction,sender_id,sender_type,bot_id,"
@@ -1315,7 +1375,7 @@ class World:
                     "timestamp": self.clock.iso(sent_at),
                     "msg_seq": seq,
                     "mentions": [],
-                    "attachments": [],
+                    "attachments": attachment_list,
                 }
                 if conv["type"] == "group":
                     payload["group_openid"] = group_openid
@@ -1459,6 +1519,17 @@ class World:
                 (msg_id_in, bot_id, 1, int(ref["sent_at"]) + window),
             )
         else:
+            if not bot["allow_proactive_msg"]:
+                raise NoPermission("proactive messages are disabled for this bot")
+            if target_kind == "group":
+                gb = await self.db.fetchone(
+                    "SELECT allow_proactive_msg FROM group_bots WHERE group_id=? AND bot_id=?",
+                    (entity_id, bot_id),
+                )
+                if gb is not None and not gb["allow_proactive_msg"]:
+                    raise NoPermission("proactive messages are disabled for this bot in this group")
+            elif self.setting("active_c2c_require_friend", False) and not await self.is_friend(bot_id, entity_id):
+                raise NoPermission("active C2C messages require a friend relationship")
             msg_seq = int(body.get("msg_seq") or 1)
             scene = "c2c" if target_kind == "user" else "group"
             rate_info = self.rate.check_active(bot_id, scene, entity_id)

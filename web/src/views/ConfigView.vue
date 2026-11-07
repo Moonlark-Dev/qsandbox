@@ -302,6 +302,16 @@ async function toggleWhitelist(bot: any) {
   }
 }
 
+async function toggleProactive(bot: any) {
+  try {
+    await api.patch(`/_mqs/bots/${bot.id}`, { allow_proactive_msg: !bot.allow_proactive_msg })
+    await refreshWorld()
+    toast(bot.allow_proactive_msg ? '已关闭主动消息' : '已开启主动消息')
+  } catch (error) {
+    fail(error)
+  }
+}
+
 const nonebotIntents = {
   guilds: false,
   guild_members: false,
@@ -387,7 +397,7 @@ const worldSettings = computed<any[]>(() => [
     ],
   },
   { key: 'require_online', label: '发送消息要求 Bot 在线（保真开关）', type: 'switch' },
-  { key: 'chat.auto_at_bot', label: '聊天页默认 @ 群内所有 Bot', type: 'switch' },
+  { key: 'chat.auto_at_bot', label: 'API 省略 at_bots 时自动 @（默认关）', type: 'switch' },
   { key: 'feature.whitelist', label: '模拟腾讯接口白名单（内邀接口）', type: 'switch' },
   { key: 'feature.expose', label: '沙箱暴露范围', type: 'select', options: [{ value: 'all', label: 'all（全部）' }, { value: 'public', label: 'public（仅公开）' }] },
   { key: 'active_quota_per_day', label: '主动消息配额（每天/会话）', type: 'number' },
@@ -490,6 +500,9 @@ const worldSettings = computed<any[]>(() => [
                 <button class="btn small primary" @click="openConnect(bot)">接入信息</button>
                 <button class="btn small" :class="bot.whitelisted ? '' : 'ghost'" @click="toggleWhitelist(bot)">
                   {{ bot.whitelisted ? '白名单' : '未白名单' }}
+                </button>
+                <button class="btn small" :class="bot.allow_proactive_msg ? '' : 'ghost'" @click="toggleProactive(bot)">
+                  主动{{ bot.allow_proactive_msg ? '开' : '关' }}
                 </button>
                 <button class="btn small" @click="editScopes(bot)">权限</button>
                 <button class="btn small" @click="rotateSecret(bot.id)">重置 secret</button>

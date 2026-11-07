@@ -28,7 +28,7 @@ async def test_intents_filtering(mqs) -> None:
         async with httpx.AsyncClient(base_url=mqs.control_base, headers=mqs.headers) as client:
             response = await client.post(
                 "/_mqs/chat/send",
-                json={"as_user": await mqs.user_id(), "to": f"group:{await mqs.group_id()}", "content": "not for you"},
+                json={"as_user": await mqs.user_id(), "to": f"group:{await mqs.group_id()}", "content": "not for you", "at_bots": ["10000"]},
             )
             assert response.status_code == 200
         with pytest.raises(asyncio.TimeoutError):
@@ -46,7 +46,7 @@ async def test_resume_replays_missed_events(mqs) -> None:
     async with httpx.AsyncClient(base_url=mqs.control_base, headers=mqs.headers) as client:
         response = await client.post(
             "/_mqs/chat/send",
-            json={"as_user": await mqs.user_id(), "to": f"group:{await mqs.group_id()}", "content": "while offline"},
+            json={"as_user": await mqs.user_id(), "to": f"group:{await mqs.group_id()}", "content": "while offline", "at_bots": ["10000"]},
         )
         assert response.status_code == 200
 

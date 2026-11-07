@@ -28,8 +28,11 @@ from ..models import (
     ChatSend,
     ClockAdvance,
     ClockSet,
+    GroupBotPatch,
     GroupCreate,
     GroupPatch,
+    JoinRequestCreate,
+    JoinRequestDecision,
     KeyboardClick,
     MemberAdd,
     MemberPatch,
@@ -270,6 +273,35 @@ async def delete_user(user_id: str, request: Request) -> Response:
 
 
 # ---------------------------------------------------------------------------
+# media upload (user rich messages)
+# ---------------------------------------------------------------------------
+
+@router.post("/media")
+async def upload_media(request: Request) -> dict:
+    world: World = get_world(request)
+    form = await request.form()
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read"):
+        raise InvalidParam("multipart upload requires a 'file' field")
+    data = await upload.read()
+    if not data:
+        raise InvalidParam("empty file")
+    if len(data) > 10 * 1024 * 1024:
+        raise InvalidParam("file too large (max 10 MiB)")
+    mime = getattr(upload, "content_type", None) or "application/octet-stream"
+    if not mime.startswith(("image/", "video/", "audio/")):
+        raise InvalidParam("only image/video/audio files are supported")
+    media = await world.store_media(data, mime)
+    return {
+        "hash": media["hash"],
+        "url": f"/media/{media['hash']}",
+        "content_type": media["mime"],
+        "size": media["size"],
+        "filename": getattr(upload, "filename", None) or media["hash"][:12],
+    }
+
+
+# ---------------------------------------------------------------------------
 # groups
 # ---------------------------------------------------------------------------
 
@@ -339,6 +371,118 @@ async def remove_bot_from_group(group_id: str, bot_id: str, request: Request) ->
     return Response(status_code=204)
 
 
+@router.get("/groups/{group_id}/info")
+async def control_group_info(group_id: str, request: Request, bot_id: str = "") -> dict:
+    world: World = get_world(request)
+    if not bot_id:
+        bot = await world.db.fetchone("SELECT bot_id FROM group_bots WHERE group_id=? LIMIT 1", (group_id,))
+        if bot is None:
+            raise InvalidParam("no bot in this group")
+        bot_id = bot["bot_id"]
+    return await world.group_info(group_id, bot_id)
+
+
+@router.get("/groups/{group_id}/bot-state")
+async def control_group_bot_state(group_id: str, request: Request, bot_id: str = "") -> dict:
+    world: World = get_world(request)
+    if not bot_id:
+        bot = await world.db.fetchone("SELECT bot_id FROM group_bots WHERE group_id=? LIMIT 1", (group_id,))
+        if bot is None:
+            raise InvalidParam("no bot in this group")
+        bot_id = bot["bot_id"]
+    return await world.group_bot_state(group_id, bot_id)
+
+
+@router.patch("/groups/{group_id}/bots/{bot_id}")
+async def control_group_bot_patch(
+    group_id: str, bot_id: str, payload: GroupBotPatch, request: Request
+) -> dict:
+    return await get_world(request).update_group_bot_settings(
+        group_id, bot_id, payload.model_dump(exclude_none=True)
+    )
+
+
+@router.get("/groups/{group_id}/blacklist")
+async def control_group_blacklist(group_id: str, request: Request) -> list[dict]:
+    world: World = get_world(request)
+    rows = await world.db.fetchall(
+        "SELECT gb.user_id, gb.banned_at, u.nickname FROM group_blacklist gb "
+        "JOIN users u ON u.id=gb.user_id WHERE gb.group_id=? ORDER BY gb.banned_at",
+        (group_id,),
+    )
+    return [dict(r) for r in rows]
+
+
+@router.post("/groups/{group_id}/blacklist")
+async def control_group_blacklist_update(group_id: str, request: Request) -> dict:
+    world: World = get_world(request)
+    body = await request.json()
+    op = str(body.get("op") or "add")
+    user_id = str(body.get("user_id") or "")
+    if not user_id:
+        raise InvalidParam("user_id is required")
+    if op == "add":
+        member = await world.db.fetchone(
+            "SELECT 1 FROM group_members WHERE group_id=? AND user_id=?", (group_id, user_id)
+        )
+        if member is not None:
+            raise InvalidParam("user is still in this group; remove them first")
+        await world.db.execute(
+            "INSERT INTO group_blacklist(group_id,user_id,banned_at) VALUES(?,?,?) "
+            "ON CONFLICT(group_id,user_id) DO NOTHING",
+            (group_id, user_id, world.clock.now_ms()),
+        )
+    else:
+        await world.db.execute(
+            "DELETE FROM group_blacklist WHERE group_id=? AND user_id=?", (group_id, user_id)
+        )
+    return {"ok": True}
+
+
+@router.get("/groups/{group_id}/join-requests")
+async def control_join_requests(group_id: str, request: Request) -> list[dict]:
+    world: World = get_world(request)
+    rows = await world.db.fetchall(
+        "SELECT jr.*, u.nickname FROM group_join_requests jr JOIN users u ON u.id=jr.user_id "
+        "WHERE jr.group_id=? AND jr.status='pending' ORDER BY jr.apply_at",
+        (group_id,),
+    )
+    return [dict(r) for r in rows]
+
+
+@router.post("/groups/{group_id}/join-requests")
+async def control_create_join_request(
+    group_id: str, payload: JoinRequestCreate, request: Request
+) -> dict:
+    return await get_world(request).create_join_request(
+        group_id, payload.user_id,
+        verify_message=payload.verify_message, source=payload.source,
+    )
+
+
+@router.post("/groups/{group_id}/join-requests/{request_id}/decide")
+async def control_decide_join_request(
+    group_id: str, request_id: str, payload: JoinRequestDecision, request: Request
+) -> dict:
+    world: World = get_world(request)
+    row = await world.db.fetchone("SELECT * FROM group_join_requests WHERE id=? AND group_id=?", (request_id, group_id))
+    if row is None:
+        raise InvalidParam("join request not found")
+    bots = await world.db.fetchall("SELECT bot_id FROM group_bots WHERE group_id=? LIMIT 1", (group_id,))
+    if not bots:
+        raise InvalidParam("no bot in this group")
+    bot_id = bots[0]["bot_id"]
+    openid = await world.openid(bot_id, "user", row["user_id"])
+    await world.approve_join_request(
+        group_id, bot_id, openid,
+        op=payload.op,
+        join_request_id=request_id,
+        reject_reason=payload.reject_reason,
+        add_to_blacklist=payload.add_to_blacklist,
+    )
+    return {"ok": True}
+
+
 # ---------------------------------------------------------------------------
 # guilds (L2 debug / test surface)
 # -----------------------------------------------------------------------------
@@ -383,7 +527,8 @@ async def control_channel_send(channel_id: str, request: Request) -> dict:
     if not user_id:
         raise InvalidParam("as_user is required")
     return await world.send_as_user_to_channel(
-        channel_id, user_id, body.get("content") or "", mentions=body.get("mentions")
+        channel_id, user_id, body.get("content") or "",
+        mentions=body.get("mentions"), attachments=body.get("attachments") or [],
     )
 
 
@@ -392,6 +537,178 @@ async def control_channel_messages(channel_id: str, request: Request, limit: int
     world: World = get_world(request)
     messages = await world.list_messages(f"channel:{channel_id}", limit=limit)
     return {"items": messages}
+
+
+async def _control_guild_bot(world: World, guild_id: str) -> str:
+    row = await world.db.fetchone(
+        "SELECT user_id FROM guild_members WHERE guild_id=? AND member_type='bot' LIMIT 1", (guild_id,)
+    )
+    if row is None:
+        raise InvalidParam("no bot in this guild")
+    return row["user_id"]
+
+
+@router.post("/guilds/{guild_id}/channels")
+async def control_channel_create(guild_id: str, request: Request) -> dict:
+    world: World = get_world(request)
+    return await world.create_channel(guild_id, await _control_guild_bot(world, guild_id), await request.json())
+
+
+@router.patch("/channels/{channel_id}")
+async def control_channel_update(channel_id: str, request: Request) -> dict:
+    world: World = get_world(request)
+    channel = await world.get_channel(channel_id)
+    return await world.update_channel(
+        channel_id, await _control_guild_bot(world, channel["guild_id"]), await request.json()
+    )
+
+
+@router.delete("/channels/{channel_id}")
+async def control_channel_delete(channel_id: str, request: Request) -> Response:
+    world: World = get_world(request)
+    channel = await world.get_channel(channel_id)
+    await world.delete_channel(channel_id, await _control_guild_bot(world, channel["guild_id"]))
+    return Response(status_code=204)
+
+
+@router.post("/guilds/{guild_id}/roles")
+async def control_role_create(guild_id: str, request: Request) -> dict:
+    world: World = get_world(request)
+    return await world.create_guild_role(guild_id, await _control_guild_bot(world, guild_id), await request.json())
+
+
+@router.patch("/guilds/{guild_id}/roles/{role_id}")
+async def control_role_update(guild_id: str, role_id: str, request: Request) -> dict:
+    world: World = get_world(request)
+    return await world.update_guild_role(
+        guild_id, await _control_guild_bot(world, guild_id), role_id, await request.json()
+    )
+
+
+@router.delete("/guilds/{guild_id}/roles/{role_id}")
+async def control_role_delete(guild_id: str, role_id: str, request: Request) -> Response:
+    world: World = get_world(request)
+    await world.delete_guild_role(guild_id, await _control_guild_bot(world, guild_id), role_id)
+    return Response(status_code=204)
+
+
+@router.put("/guilds/{guild_id}/members/{user_id}/roles/{role_id}")
+async def control_member_role_add(guild_id: str, user_id: str, role_id: str, request: Request) -> Response:
+    world: World = get_world(request)
+    await world.assign_guild_role(guild_id, await _control_guild_bot(world, guild_id), user_id, role_id)
+    return Response(status_code=204)
+
+
+@router.delete("/guilds/{guild_id}/members/{user_id}/roles/{role_id}")
+async def control_member_role_remove(
+    guild_id: str, user_id: str, role_id: str, request: Request
+) -> Response:
+    world: World = get_world(request)
+    await world.unassign_guild_role(guild_id, await _control_guild_bot(world, guild_id), user_id, role_id)
+    return Response(status_code=204)
+
+
+@router.delete("/guilds/{guild_id}/members/{user_id}")
+async def control_guild_member_delete(guild_id: str, user_id: str, request: Request) -> Response:
+    world: World = get_world(request)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    await world.remove_guild_member(guild_id, await _control_guild_bot(world, guild_id), user_id, body)
+    return Response(status_code=204)
+
+
+@router.patch("/guilds/{guild_id}/members/{user_id}/mute")
+async def control_guild_member_mute(guild_id: str, user_id: str, request: Request) -> Response:
+    world: World = get_world(request)
+    await world.set_guild_member_mute(
+        guild_id, await _control_guild_bot(world, guild_id), user_id, await request.json()
+    )
+    return Response(status_code=204)
+
+
+@router.patch("/guilds/{guild_id}/mute")
+async def control_guild_mute(guild_id: str, request: Request) -> Response:
+    world: World = get_world(request)
+    await world.set_guild_mute(guild_id, await _control_guild_bot(world, guild_id), await request.json())
+    return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# channel DMs / friends
+# ---------------------------------------------------------------------------
+
+@router.get("/dms")
+async def control_list_dms(request: Request) -> list[dict]:
+    return await get_world(request).list_dms_sessions()
+
+
+@router.post("/dms")
+async def control_create_dms(request: Request) -> dict:
+    world: World = get_world(request)
+    body = await request.json()
+    bot_id = str(body.get("bot_id") or "")
+    user_id = str(body.get("user_id") or "")
+    source = str(body.get("source_guild_id") or "")
+    if not bot_id or not user_id or not source:
+        raise InvalidParam("bot_id, user_id and source_guild_id are required")
+    return await world.create_dms(bot_id, user_id, source)
+
+
+@router.post("/dms/{dms_guild_id}/messages")
+async def control_dms_send(dms_guild_id: str, request: Request) -> dict:
+    world: World = get_world(request)
+    body = await request.json()
+    user_id = str(body.get("as_user") or "")
+    if not user_id:
+        raise InvalidParam("as_user is required")
+    return await world.send_as_user_to_dms(
+        dms_guild_id, user_id, body.get("content") or "",
+        attachments=body.get("attachments") or [],
+    )
+
+
+@router.post("/dms/{dms_guild_id}/bot-messages")
+async def control_dms_bot_send(dms_guild_id: str, request: Request) -> dict:
+    world: World = get_world(request)
+    session = await world.db.fetchone("SELECT * FROM dm_sessions WHERE dms_guild_id=?", (dms_guild_id,))
+    if session is None:
+        raise InvalidParam("DM session not found")
+    body = await request.json()
+    return await world.send_dms(session["bot_id"], dms_guild_id, {"content": body.get("content") or ""})
+
+
+@router.get("/dms/{dms_guild_id}/messages")
+async def control_dms_messages(dms_guild_id: str, request: Request, limit: int = 50) -> dict:
+    world: World = get_world(request)
+    return {"items": await world.list_messages(f"dms:{dms_guild_id}", limit=limit)}
+
+
+@router.get("/bots/{bot_id}/friends")
+async def control_list_friends(bot_id: str, request: Request) -> list[dict]:
+    return await get_world(request).list_friends(bot_id)
+
+
+@router.post("/bots/{bot_id}/friends/{user_id}")
+async def control_add_friend(bot_id: str, user_id: str, request: Request) -> dict:
+    world: World = get_world(request)
+    body = {}
+    try:
+        body = await request.json()
+    except ValueError:
+        pass
+    return await world.add_friend(
+        bot_id, user_id,
+        scene=int(body.get("scene") or 1000),
+        scene_param=str(body.get("scene_param") or ""),
+    )
+
+
+@router.delete("/bots/{bot_id}/friends/{user_id}")
+async def control_remove_friend(bot_id: str, user_id: str, request: Request) -> Response:
+    await get_world(request).remove_friend(bot_id, user_id)
+    return Response(status_code=204)
 
 
 # ---------------------------------------------------------------------------
@@ -510,6 +827,7 @@ async def chat_send(payload: ChatSend, request: Request) -> dict:
         mentions=payload.mentions,
         at_bots=at_bots,
         reply_to=payload.reply_to,
+        attachments=payload.attachments,
     )
 
 

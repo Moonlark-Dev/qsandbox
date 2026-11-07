@@ -196,6 +196,9 @@ export interface GroupPatch {
   name?: string | null;
   owner_id?: string | null;
   join_policy?: string | null;
+  finger_memo?: string | null;
+  class_text?: string | null;
+  tags?: Array<string> | null;
 }
 
 export interface MemberAdd {
@@ -225,6 +228,7 @@ export interface BotPatch {
   scopes?: Array<string> | null;
   delivery?: "ws" | "webhook" | null;
   whitelisted?: boolean | null;
+  allow_proactive_msg?: boolean | null;
 }
 
 export interface ChatSend {
@@ -236,6 +240,7 @@ export interface ChatSend {
   mentions?: Array<string>;
   at_bots?: Array<string> | null;
   reply_to?: string | null;
+  attachments?: Array<Record<string, any>>;
 }
 
 export interface ClockAdvance {
