@@ -30,6 +30,7 @@ from ..models import (
     ClockSet,
     GroupCreate,
     GroupPatch,
+    KeyboardClick,
     MemberAdd,
     MemberPatch,
     RandomUsersRequest,
@@ -487,6 +488,11 @@ async def list_messages(conversation_id: str, request: Request, limit: int = 50,
     world: World = get_world(request)
     messages = await world.list_messages(conversation_id, limit=limit, before_seq=before_seq)
     return {"items": messages, "next_cursor": messages[0]["seq"] if messages else None}
+
+
+@router.post("/messages/{message_id}/click")
+async def click_keyboard_button(message_id: str, payload: KeyboardClick, request: Request) -> dict:
+    return await get_world(request).click_keyboard_button(payload.user_id, message_id, payload.index)
 
 
 @router.post("/chat/send")

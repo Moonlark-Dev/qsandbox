@@ -84,9 +84,13 @@ async def read_messages(conversation_id: str, limit: int = 20) -> Any:
 
 
 @server.tool(description="以虚拟用户身份发送消息。to 形如 group:g_000001 或 dm:10000:u_000001")
-async def send_as_user(as_user: str, to: str, text: str, at_bots: list[str] | None = None) -> Any:
+async def send_as_user(
+    as_user: str, to: str, text: str, at_bots: list[str] | None = None, no_at: bool = False
+) -> Any:
     body: dict[str, Any] = {"as_user": as_user, "to": to, "content": text}
-    if at_bots:
+    if no_at:
+        body["at_bots"] = []
+    elif at_bots:
         body["at_bots"] = at_bots
     return await _call("POST", "/_mqs/chat/send", json_body=body)
 

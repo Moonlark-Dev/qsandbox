@@ -2,12 +2,12 @@
 
 > 自动生成 · 文档快照 2026-11-07 · 请勿手改
 
-**30 endpoints — 29 implemented, 1 stubs, 0 n/a**
+**31 endpoints — 30 implemented, 1 stubs, 0 n/a**
 
 | 层级 | 总数 | full | partial | stub | n/a |
 |---|---|---|---|---|---|
 | L0 | 6 | 6 | 0 | 0 | 0 |
-| L1 | 10 | 8 | 2 | 0 | 0 |
+| L1 | 11 | 9 | 2 | 0 | 0 |
 | L2 | 11 | 10 | 0 | 1 | 0 |
 | L3 | 3 | 2 | 1 | 0 | 0 |
 
@@ -26,6 +26,7 @@
 | `DELETE` | `/v2/groups/{group_openid}/messages/{message_id}` | partial | Bot Token | L1 | 撤回群聊消息 |
 | `POST` | `/v2/groups/{group_openid}/upload_part_finish` | full | Bot Token | L1 | 群聊富媒体分片上传：完成分片 |
 | `POST` | `/v2/groups/{group_openid}/upload_prepare` | full | Bot Token | L1 | 群聊富媒体分片上传：预上传 |
+| `PUT` | `/v2/interactions/{interaction_id}` | full | Bot Token | L1 | 确认按钮回调结果（code 0 成功） |
 | `PUT` | `/v2/uploads/{upload_id}/parts/{index}` | full | 无 | L1 | 富媒体分片上传：上传分片（预签名 URL） |
 | `POST` | `/v2/users/{openid}/files` | full | Bot Token | L1 | 上传单聊富媒体文件 |
 | `DELETE` | `/v2/users/{openid}/messages/{message_id}` | partial | Bot Token | L1 | 撤回单聊消息 |

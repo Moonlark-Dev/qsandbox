@@ -87,6 +87,13 @@ class ChatSend(BaseModel):
     reply_to: str | None = None
 
 
+class KeyboardClick(BaseModel):
+    """A virtual user clicks one button of an outbound inline keyboard."""
+
+    user_id: str
+    index: int = 0
+
+
 class ClockAdvance(BaseModel):
     duration: str | None = None  # "6m"
     ms: int | None = None

@@ -1530,6 +1530,115 @@ class World:
             result["_rate"] = rate_result
         return result
 
+    async def click_keyboard_button(self, user_id: str, message_id: str, index: int) -> dict[str, Any]:
+        """Simulate a user clicking one inline-keyboard button.
+
+        Type 1 (command) sends ``action.data`` as a normal user message; type 2
+        (callback) emits an ``INTERACTION_CREATE`` gateway event; type 0 (link)
+        is returned to the caller so the GUI can open it.
+        """
+        row = await self.db.fetchone("SELECT * FROM messages WHERE msg_id=?", (message_id,))
+        if row is None or row["direction"] != "out":
+            raise MessageNotFound("message is not an outbound bot message")
+        raw = json.loads(row["raw_json"] or "{}")
+        rows = ((raw.get("keyboard") or {}).get("content") or {}).get("rows") or []
+        buttons = [button for r in rows for button in (r.get("buttons") or [])]
+        if index < 0 or index >= len(buttons):
+            raise InvalidParam("keyboard button index out of range")
+        button = buttons[index]
+        action = button.get("action") or {}
+        data = str(action.get("data") or "")
+        kind = int(action.get("type") if action.get("type") is not None else 1)
+        conversation_id = row["conversation_id"]
+        bot_id = row["bot_id"]
+        bot = dict(await self.bot_by_id(bot_id))
+        if await self.db.fetchone("SELECT 1 FROM users WHERE id=?", (user_id,)) is None:
+            raise InvalidParam("unknown user")
+        if kind == 0:
+            return {"kind": "link", "data": data, "message": None}
+        if kind == 2:
+            interaction = await self._emit_button_interaction(
+                bot, bot_id, user_id, conversation_id, message_id, button, data, index
+            )
+            return {"kind": "callback", "data": data, "interaction": interaction, "message": None}
+        at_bots = [bot_id] if conversation_id.startswith("group:") else None
+        if conversation_id.startswith("channel:"):
+            result = await self.send_as_user_to_channel(conversation_id.split(":", 1)[1], user_id, data)
+        else:
+            result = await self.send_as_user(conversation_id, user_id, data, at_bots=at_bots)
+        return {"kind": "command", "data": data, **result}
+
+    async def _emit_button_interaction(
+        self,
+        bot: dict[str, Any],
+        bot_id: str,
+        user_id: str,
+        conversation_id: str,
+        message_id: str,
+        button: dict[str, Any],
+        data: str,
+        index: int,
+    ) -> dict[str, Any]:
+        user_openid = await self.openid(bot_id, "user", user_id)
+        interaction_id = new_event_id()
+        payload: dict[str, Any] = {
+            "id": interaction_id,
+            "application_id": int(bot["app_id"]) if str(bot["app_id"]).isdigit() else bot["app_id"],
+            "type": 11,
+            "timestamp": self.clock.iso(),
+            "version": 1,
+            "data": {
+                "type": 11,
+                "resolved": {
+                    "button_id": str(button.get("id") or index),
+                    "button_data": data,
+                    "message_id": message_id,
+                    "user_id": user_openid,
+                },
+            },
+        }
+        if conversation_id.startswith("group:"):
+            group_id = conversation_id.split(":", 1)[1]
+            payload.update(
+                {
+                    "scene": "group",
+                    "chat_type": 2,
+                    "group_openid": await self.openid(bot_id, "group", group_id),
+                    "group_member_openid": user_openid,
+                    "user_openid": user_openid,
+                }
+            )
+        elif conversation_id.startswith("dm:"):
+            payload.update({"scene": "c2c", "chat_type": 1, "user_openid": user_openid})
+        elif conversation_id.startswith("channel:"):
+            channel = await self.get_channel(conversation_id.split(":", 1)[1])
+            payload.update(
+                {
+                    "scene": "guild",
+                    "chat_type": 0,
+                    "guild_id": channel["guild_id"],
+                    "channel_id": channel["id"],
+                    "user_openid": user_openid,
+                }
+            )
+        cur = await self.db.execute(
+            "INSERT INTO events(event_id,type,payload_json,conversation_id,target_bot_id,created_at)"
+            " VALUES(?,?,?,?,?,?)",
+            (interaction_id, "INTERACTION_CREATE", json.dumps(payload, ensure_ascii=False),
+             conversation_id, bot_id, self.clock.now_ms()),
+        )
+        await self._deliver(bot_id, int(cur), "INTERACTION_CREATE", interaction_id, payload, bot, conversation_id)
+        return {"id": interaction_id, "payload": payload, "seq": int(cur)}
+
+    async def ack_interaction(self, bot_id: str, interaction_id: str, code: int = 0) -> dict[str, Any]:
+        row = await self.db.fetchone(
+            "SELECT seq FROM events WHERE event_id=? AND type='INTERACTION_CREATE' AND target_bot_id=?",
+            (interaction_id, bot_id),
+        )
+        if row is None:
+            raise MessageNotFound("interaction not found")
+        return {"code": code, "seq": int(row["seq"])}
+
     async def recall_message(self, bot_id: str, target_kind: str, target_openid: str, message_id: str) -> None:
         mapping = await self.resolve_openid(bot_id, target_openid)
         if mapping["kind"] != target_kind:

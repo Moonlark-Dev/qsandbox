@@ -204,6 +204,118 @@ async def test_mention_only_delivered_to_mentioned_bot(mqs) -> None:
     assert {e["target_bot_id"] for e in group_events} == {"10001"}
 
 
+async def test_keyboard_click_command_and_callback(mqs) -> None:
+    ws, ready, token = await mqs.connect_gateway(intents=(1 << 25) | (1 << 26))
+    headers = {"Authorization": f"QQBot {token}"}
+    conversation = f"group:{await mqs.group_id()}"
+    try:
+        await _send_user(mqs, "menu please")
+        message = await mqs.last_inbound(conversation)
+        event = (await mqs.world.list_events())[-1]
+        group_openid = event["payload"]["group_openid"]
+        async with httpx.AsyncClient(base_url=mqs.sim_base) as client:
+            response = await client.post(
+                f"/v2/groups/{group_openid}/messages",
+                headers=headers,
+                json={
+                    "msg_type": 2,
+                    "markdown": {"content": "**菜单**"},
+                    "keyboard": {
+                        "content": {
+                            "rows": [
+                                {
+                                    "buttons": [
+                                        {
+                                            "id": "cmd-1",
+                                            "render_data": {"label": "重抽"},
+                                            "action": {"type": 1, "data": "!jrrp r"},
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    },
+                    "msg_id": message["msg_id"],
+                },
+            )
+            assert response.status_code == 200, response.text
+        async with httpx.AsyncClient(base_url=mqs.control_base, headers=mqs.headers) as client:
+            out = (await client.get(f"/_mqs/conversations/{conversation}/messages")).json()["items"][-1]
+            click = await client.post(
+                f"/_mqs/messages/{out['msg_id']}/click",
+                json={"user_id": await mqs.user_id(), "index": 0},
+            )
+            assert click.status_code == 200, click.text
+            assert click.json()["kind"] == "command"
+            after = await mqs.last_inbound(conversation)
+            assert "!jrrp r" in after["content"]
+
+        async with httpx.AsyncClient(base_url=mqs.sim_base) as client:
+            response = await client.post(
+                f"/v2/groups/{group_openid}/messages",
+                headers=headers,
+                json={
+                    "msg_type": 2,
+                    "markdown": {"content": "**菜单 2**"},
+                    "keyboard": {
+                        "content": {
+                            "rows": [
+                                {
+                                    "buttons": [
+                                        {
+                                            "id": "cb-1",
+                                            "render_data": {"label": "回调"},
+                                            "action": {"type": 2, "data": "callback-data"},
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    },
+                    "msg_id": message["msg_id"],
+                },
+            )
+            assert response.status_code == 200, response.text
+        async with httpx.AsyncClient(base_url=mqs.control_base, headers=mqs.headers) as client:
+            out = (await client.get(f"/_mqs/conversations/{conversation}/messages")).json()["items"][-1]
+            click = await client.post(
+                f"/_mqs/messages/{out['msg_id']}/click",
+                json={"user_id": await mqs.user_id(), "index": 0},
+            )
+            assert click.status_code == 200, click.text
+            assert click.json()["kind"] == "callback"
+
+        frame = None
+        for _ in range(20):
+            candidate = json.loads(await ws.recv())
+            if candidate.get("t") == "INTERACTION_CREATE":
+                frame = candidate
+                break
+        assert frame is not None
+        payload = frame["d"]
+        assert payload["data"]["resolved"]["button_id"] == "cb-1"
+        assert payload["data"]["resolved"]["button_data"] == "callback-data"
+        assert payload["group_openid"] == group_openid
+        async with httpx.AsyncClient(base_url=mqs.sim_base) as client:
+            ack = await client.put(
+                f"/v2/interactions/{payload['id']}",
+                headers=headers,
+                json={"code": 0},
+            )
+            assert ack.status_code == 200, ack.text
+    finally:
+        await ws.close()
+
+
+async def test_group_message_without_bot_mention(mqs) -> None:
+    conversation = f"group:{await mqs.group_id()}"
+    result = await _send_user(mqs, "just chatting", at_bots=[])
+    assert result["delivered_to"] == []
+    events = [e for e in await mqs.world.list_events() if e["type"] == "GROUP_AT_MESSAGE_CREATE"]
+    assert events == []
+    assert (await mqs.last_inbound(conversation))["content"] == "just chatting"
+
+
 async def test_c2c_passive_window_60min_and_4_replies(mqs) -> None:
     ws, ready, token = await mqs.connect_gateway()
     headers = {"Authorization": f"QQBot {token}"}

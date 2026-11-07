@@ -336,6 +336,18 @@ define(
     tag="media",
 )
 define(
+    "interaction.ack",
+    method="PUT",
+    path="/v2/interactions/{interaction_id}",
+    summary="确认按钮回调结果（code 0 成功）",
+    auth="bot",
+    rate_class="default",
+    errors=(40034,),
+    coverage="full",
+    layer="L1",
+    tag="message",
+)
+define(
     "guild.get",
     method="GET",
     path="/guilds/{guild_id}",

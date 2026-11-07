@@ -9,6 +9,7 @@ const messages = ref<any[]>([])
 const text = ref('')
 const replyTo = ref<any>(null)
 const selectedBots = ref<string[]>([])
+const noAt = ref(false)
 const currentUserId = ref('')
 const members = ref<any[]>([])
 const addMemberId = ref('')
@@ -93,6 +94,7 @@ async function selectConversation(id: string) {
   dmTarget.value = null
   currentId.value = id
   selectedBots.value = []
+  noAt.value = false
   replyTo.value = null
   await loadMessages(id)
   if (activeGroup.value) await loadMembers(activeGroup.value.id)
@@ -151,7 +153,7 @@ async function send() {
       as_user: currentUserId.value,
       conversation_id: conversation,
       content,
-      at_bots: selectedBots.value.length ? selectedBots.value : null,
+      at_bots: noAt.value ? [] : selectedBots.value.length ? selectedBots.value : null,
       reply_to: replyTo.value?.msg_id || null,
     })
     text.value = ''
@@ -192,9 +194,15 @@ function switchAccount(id: string) {
 }
 
 function toggleBot(id: string) {
+  noAt.value = false
   const index = selectedBots.value.indexOf(id)
   if (index >= 0) selectedBots.value.splice(index, 1)
   else selectedBots.value.push(id)
+}
+
+function toggleNoAt() {
+  noAt.value = !noAt.value
+  if (noAt.value) selectedBots.value = []
 }
 
 function quote(message: any) {
@@ -280,7 +288,7 @@ function display(content: string): string {
   return (content || '').replace(/<@![^>]+>/g, '@').trim()
 }
 
-function renderText(message: any): string {
+function renderText(message: any, forPreview = false): string {
   if (!message) return ''
   if (message.content && message.content.trim()) return display(message.content)
   const raw = message.raw || message
@@ -294,22 +302,57 @@ function renderText(message: any): string {
   if (raw.embed) {
     return [raw.embed.title, raw.embed.prompt, raw.embed.description].filter(Boolean).join(' · ')
   }
-  if (raw.media || message.attachments?.length) return '[媒体消息]'
-  if (raw.keyboard?.content?.rows?.length) return '[消息按钮]'
-  return '[空消息]'
+  if (raw.media || message.attachments?.length) return forPreview ? '[媒体消息]' : ''
+  if (raw.keyboard?.content?.rows?.length) return forPreview ? '[消息按钮]' : ''
+  return forPreview ? '[空消息]' : ''
 }
 
 function preview(message: any): string {
-  const text = renderText(message)
+  const text = renderText(message, true)
   return text === '[空消息]' ? '还没有消息' : text
 }
 
 function keyboardButtons(message: any): any[] {
   const rows = message?.raw?.keyboard?.content?.rows || message?.keyboard?.content?.rows || []
-  return rows.flatMap((row: any) => row.buttons || []).map((button: any) => ({
-    label: button.render_data?.label || button.action?.data || '按钮',
-    data: button.action?.data || '',
-  }))
+  let index = 0
+  return rows.flatMap((row: any) => row.buttons || []).map((button: any) => {
+    const item = {
+      index: index++,
+      label: button.render_data?.label || button.action?.data || '按钮',
+      data: button.action?.data || '',
+      type: Number(button.action?.type ?? 1),
+      enter: button.action?.enter !== false,
+    }
+    return item
+  })
+}
+
+async function clickButton(message: any, button: any) {
+  if (message.recalled_at) return
+  if (button.type === 0 || (!button.type && /^https?:\/\//.test(button.data))) {
+    if (button.data) window.open(button.data, '_blank', 'noopener')
+    return
+  }
+  try {
+    const result = await api.post<any>(`/_mqs/messages/${encodeURIComponent(message.msg_id)}/click`, {
+      user_id: currentUserId.value,
+      index: button.index,
+    })
+    if (result.kind === 'link') {
+      if (result.data) window.open(result.data, '_blank', 'noopener')
+      return
+    }
+    if (result.kind === 'callback') {
+      toast('已触发按钮回调')
+      await refreshStatus()
+      return
+    }
+    await loadMessages(activeConversationId.value)
+    await refreshWorld()
+    await refreshStatus()
+  } catch (error) {
+    toast(error instanceof Error ? error.message : String(error))
+  }
 }
 
 function msgTag(message: any): string {
@@ -398,9 +441,18 @@ function isImage(att: any): boolean {
             <div class="msg-bubble" :style="message.recalled_at ? 'opacity: .55; text-decoration: line-through' : ''">
               {{ renderText(message) }}
               <div v-if="keyboardButtons(message).length" class="keyboard-row">
-                <span v-for="(button, index) in keyboardButtons(message)" :key="index" class="keyboard-btn" :title="button.data">
+                <button
+                  v-for="button in keyboardButtons(message)"
+                  :key="button.index"
+                  type="button"
+                  class="keyboard-btn"
+                  :class="{ 'keyboard-disabled': message.recalled_at }"
+                  :title="button.data"
+                  :disabled="!!message.recalled_at"
+                  @click="clickButton(message, button)"
+                >
                   {{ button.label }}
-                </span>
+                </button>
               </div>
               <div v-for="att in attachments(message)" :key="att.id || att.url" style="margin-top: 6px">
                 <img v-if="isImage(att) && att.url" :src="att.url" style="max-width: 240px; border-radius: 8px" alt="" />
@@ -440,8 +492,18 @@ function isImage(att: any): boolean {
             >
               {{ bot.name }}
             </button>
+            <button
+              v-if="groupBots.length"
+              class="btn small"
+              :class="noAt ? 'primary' : 'ghost'"
+              title="发送普通群消息，不唤醒任何 Bot"
+              @click="toggleNoAt"
+            >
+              不 @ Bot
+            </button>
             <span v-if="!groupBots.length" class="small faint">（此会话没有 Bot）</span>
-            <span v-if="groupBots.length && !selectedBots.length" class="small faint">默认按设置自动 @</span>
+            <span v-if="noAt" class="small faint">普通群消息 · Bot 不会收到</span>
+            <span v-else-if="groupBots.length && !selectedBots.length" class="small faint">默认按设置自动 @</span>
           </template>
         </div>
         <div class="composer-row">

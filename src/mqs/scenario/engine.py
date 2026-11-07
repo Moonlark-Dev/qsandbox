@@ -251,7 +251,7 @@ class ScenarioRunner:
         else:
             conversation = await self.world.resolve_conversation(to=target)
         at_bots = value.get("at_bots")
-        if at_bots:
+        if at_bots is not None:
             at_bots = [self.bots.get(b, str(b)) for b in at_bots]
         reply_to = self._subst(str(value["reply_to"])) if value.get("reply_to") else None
         result = await self.world.send_as_user(

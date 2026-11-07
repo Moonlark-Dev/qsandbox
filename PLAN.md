@@ -14,7 +14,7 @@
 | D2 | `uvicorn` 两个 listener 同进程 `gather` | 同进程两个 `uvicorn.Server`，共享一个 `World`/`DB`，统一 `asyncio` 生命周期 | 保留草案结论；补充实现细节：两个 server 各自 `serve()`，主协程等两者，收到 SIGINT 时同时 `should_exit`。 |
 | D3 | 控制 API token 放启动握手 | token 只出现在 **stdout 握手行 / `runtime.json` / 请求头**；前端用 **URL fragment 一次性 nonce 换 HttpOnly cookie** | 草案已说"不进 URL query"；fragment 不会进服务器日志/Referer，nonce 一次性且 60s 过期。 |
 | D4 | 前端独立 dev server | 生产由控制 API 静态托管 `web/dist`，开发用 `vite dev` 代理到控制 API | 一个端口，避免 CORS/token 二套配置。 |
-| D5 | "全量模拟 QQ Bot API v2" | **契约清单驱动**：v0.1 交付 L0 + L1 的核心 30 条端点；频道家族（L2）标 `stub`，控制台/未公开接口标 `n/a` | 全量不可交付。覆盖等级写进注册表，状态页实时统计，避免"永远做不完"变成"看起来做完了"。 |
+| D5 | "全量模拟 QQ Bot API v2" | **契约清单驱动**：v0.1 交付 L0 + L1 的核心 31 条端点；频道家族（L2）标 `stub`，控制台/未公开接口标 `n/a` | 全量不可交付。覆盖等级写进注册表，状态页实时统计，避免"永远做不完"变成"看起来做完了"。 |
 | D6 | botpy 直接改 base_url | botpy 的 `Route.SCHEME/DOMAIN` 和 token URL 是硬编码的，**必须 monkeypatch**；因此提供 `mqs.compat.botpy` 垫片 | SDK 不提供 base_url 配置（已核对 botpy 源码：`botpy/http.py:Route`、`botpy/robot.py`）。把垫片放进仓库比写"请改 SDK 源码"靠谱。 |
 | D7 | 网关 `s` 序号 | 使用 **全局事件序号**（每个 Bot 一条投递记录），RESUME 按 `seq > last_seq` 补发 | 与草案"事件溯源"一致，且缺口对客户端无影响（botpy 只记 max）。 |
 | D8 | 被动回复去重 | `msg_id + msg_seq` 显式去重；**未显式给 `msg_seq` 时自动递增** | 真实平台是"相同 msg_id+msg_seq 重复发送失败"。但 botpy 的 `msg_seq` 默认值是 1，若严格按默认值，一条消息的第二次回复必失败——自动递增更接近 SDK 作者的实际预期，也保留显式去重分支。 |
@@ -349,7 +349,7 @@ v0.1 已落地并通过验收：
   `/channels/{id}`、`/channels/{id}/messages`（GET/POST）、`/channels/{id}/messages/{msg_id}`
 - 网关：`MESSAGE_CREATE`（intent 1<<9）与 `AT_MESSAGE_CREATE`（intent 1<<30）
 - 频道消息：5/s/频道、主动 20/天/频道、2 频道/天、被动 5 分钟
-- 覆盖率：**30 条中 29 已实现**（26 full + 3 partial），仅 `/users/@me/dms` 保持 stub；新增内邀接口
+- 覆盖率：**31 条中 30 已实现**（27 full + 3 partial），仅 `/users/@me/dms` 保持 stub；新增内邀接口
   `GET /v2/groups/{group_openid}/members`（60 QPM）与 `.../members/{member_openid}`（30 QPM）
 
 ### 12.3 桌面端（Electron）

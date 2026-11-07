@@ -96,14 +96,14 @@ mqs status --json
 |---|---|
 | 鉴权 | `getAppAccessToken`、`Authorization: QQBot <token>`、7200s 过期、错误码 |
 | 网关 | hello / identify / ready / heartbeat / resume / invalid session、intents、分片、断线补发 |
-| 群/C2C | 文本/markdown/keyboard/ark/embed/媒体、被动窗口与次数、`msg_id+msg_seq` 去重、引用、撤回 |
+| 群/C2C | 文本/markdown/keyboard/ark/embed/媒体、被动窗口与次数、`msg_id+msg_seq` 去重、引用、撤回、按钮点击（指令/回调/链接）、不 @ Bot 的普通群消息 |
 | 频道 L2 | guild / channel / member / role、频道消息、`MESSAGE_CREATE` / `AT_MESSAGE_CREATE`、频道频控 |
 | 媒体 | `file_type` 1/2/3、url / multipart / base64 `file_data` / 分片上传（prepare → part → finish）、内容哈希下载 |
 | 事件 | WebSocket 与 Webhook 双投递、Ed25519 握手、事件溯源 |
 | 可观测 | 双向 HTTP/WS 帧、事件流、限流拒绝、吞吐、DB 大小、覆盖率实时统计 |
 | Agent | CLI（`--json` / 稳定退出码）、MCP stdio（10 个工具）、10 个 YAML 场景 + JUnit/TAP |
 | GUI | Electron 桌面 + 浏览器预览：状态/配置/聊天/调试器/设置，规则引擎、私聊 Bot、账号切换 |
-| 覆盖率 | 30 条端点：29 已实现（26 full + 3 partial），1 stub |
+| 覆盖率 | 31 条端点：30 已实现（27 full + 3 partial），1 stub |
 
 实时覆盖率：`GET /_mqs/contract`，或 [docs/COVERAGE.md](./docs/COVERAGE.md)（`mqs contract export` 生成）。
 

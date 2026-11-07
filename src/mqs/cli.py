@@ -389,6 +389,7 @@ def send(
     to: Annotated[str, typer.Option("--to", help="group:<id> | dm:<bot>:<user>")] = "",
     conversation: Annotated[str, typer.Option("--conversation")] = "",
     at_bot: Annotated[list[str] | None, typer.Option("--at-bot", help="指定要 @ 的 Bot，可重复")] = None,
+    no_at: Annotated[bool, typer.Option("--no-at", help="不 @ 任何 Bot（普通群消息）")] = False,
     profile: ProfileOpt = DEFAULT_PROFILE,
     home: HomeOpt = "",
     as_json: JsonOpt = False,
@@ -402,7 +403,7 @@ def send(
             "content": text,
             "to": to or None,
             "conversation_id": conversation or None,
-            "at_bots": at_bot or None,
+            "at_bots": [] if no_at else (at_bot or None),
         },
     )
     if as_json:

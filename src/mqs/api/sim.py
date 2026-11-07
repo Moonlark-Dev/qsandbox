@@ -204,6 +204,16 @@ async def delete_c2c_message(openid: str, message_id: str, request: Request, bot
     return Response(status_code=204)
 
 
+@router.put("/v2/interactions/{interaction_id}")
+async def ack_interaction(interaction_id: str, request: Request, bot: dict = Depends(require_bot)) -> dict:
+    world: World = get_world(request)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    return await world.ack_interaction(bot["id"], interaction_id, int(body.get("code") or 0))
+
+
 # ---------------------------------------------------------------------------
 # media
 # ---------------------------------------------------------------------------
