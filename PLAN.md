@@ -506,9 +506,14 @@ path.: No space left on device`）并 exit 1，桌面端只能原样转述退出
 
 上线 `pip install moonlark-qsandbox` 渠道（桌面安装包仍走 GitHub Release）。
 
-- 打包修复：`web/dist` 通过 hatch 的 `artifacts` + `force-include` 同时进入 sdist 与 wheel，
-  落到 `mqs/web/dist`；`find_web_dist()` 增加包内候选。此前 wheel 装出来的控制台只剩
-  “前端尚未构建”兜底页——API/CLI 都正常，所以这个洞很容易漏掉（冒烟脚本按这个特征断言）。
+- 打包修复：`web/dist` 通过 hatch 的 `artifacts`（sdist）+ `hatch_build.py` 构建钩子（wheel，
+  仅当 `web/dist` 存在时）进入包里，落到 `mqs/web/dist`；`find_web_dist()` 增加包内候选。
+  此前 wheel 装出来的控制台只剩“前端尚未构建”兜底页——API/CLI 都正常，所以这个洞很容易
+  漏掉（冒烟脚本按这个特征断言）。
+- **不要用静态 `force-include`**：新检出的仓库没有 `web/dist`（gitignore），hatchling 在准备
+  editable metadata 时就会 `Forced include not found`，`pip install -e .` 直接失败——v0.1.0
+  的 CI `python` 与 `botpy-compat` 两个 job 就是这么一起挂的。改成存在才 include 的构建钩子后，
+  源码安装恢复，缺 GUI 由发布闸门拦截。
 - 新增 `.github/workflows/publish.yml`：`v*` tag → 构建前端 → 校验 tag 与 pyproject 版本
   一致 → `python -m build` + `twine check` → `tools/check_dist.py`（GUI / LICENSE / 版本）→
   `tools/smoke_wheel.py`（干净 venv 装 wheel、起服、确认 GUI 不是兜底页）→ 用
