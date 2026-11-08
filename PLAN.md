@@ -501,3 +501,20 @@ path.: No space left on device`）并 exit 1，桌面端只能原样转述退出
 - 新增可复用工作流 `desktop-build.yml`（web → sidecar → 冒烟 → 打包 → 校验），
   `desktop.yml` 与 `release.yml` 共用；`ci.yml` 的 sidecar artifact 改为打好的
   `mqs.dist` tar 包。
+
+### 13.10 PyPI 发布（2026-11-08）
+
+上线 `pip install moonlark-qsandbox` 渠道（桌面安装包仍走 GitHub Release）。
+
+- 打包修复：`web/dist` 通过 hatch 的 `artifacts` + `force-include` 同时进入 sdist 与 wheel，
+  落到 `mqs/web/dist`；`find_web_dist()` 增加包内候选。此前 wheel 装出来的控制台只剩
+  “前端尚未构建”兜底页——API/CLI 都正常，所以这个洞很容易漏掉（冒烟脚本按这个特征断言）。
+- 新增 `.github/workflows/publish.yml`：`v*` tag → 构建前端 → 校验 tag 与 pyproject 版本
+  一致 → `python -m build` + `twine check` → `tools/check_dist.py`（GUI / LICENSE / 版本）→
+  `tools/smoke_wheel.py`（干净 venv 装 wheel、起服、确认 GUI 不是兜底页）→ 用
+  `PYPI_API_TOKEN` 上传（`skip-existing`，重跑不炸）；手动触发默认 dry-run。
+- 版本号收敛到 `mqs.__version__`，`mqs serve` 的握手 JSON 也带 `version`；license 元数据
+  改为 SPDX 表达式（`AGPL-3.0-or-later` + `license-files`）。
+- 首次 v0.1.0 已由 CI 发布：`pip install moonlark-qsandbox==0.1.0` 后起服，GUI 正常。
+- 待办：改用 PyPI Trusted Publishing（删掉 secret，加 `id-token: write` 并在 PyPI 注册
+  publisher）；仓库里的 `PYPI_API_TOKEN` 建议发布后轮换一次。
