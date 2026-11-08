@@ -14,12 +14,12 @@ MQS_BASE_URL=http://127.0.0.1:5700 python examples/botpy_echo/bot.py
 # 日志出现 [echo] ready as MQS 测试 Bot 即成功
 ```
 
-> botpy 1.2.1 只认识 `GROUP_AT_MESSAGE_CREATE`/`C2C_MESSAGE_CREATE`。这个群默认开着
-> 「全量消息」，@ 消息会以 `GROUP_MESSAGE_CREATE` 下发（botpy 只会打印
-> `_parser unknown event`，不会断线）。要让它回 echo，先在聊天页右栏「群管理」把
-> **全量消息**关掉（`recv_msg_setting=only_mention`），@ 消息就会回到 `GROUP_AT_MESSAGE_CREATE`。
-> 注意 `mqs script run smoke` 用的是新群（默认全量消息开），需要能处理
-> `GROUP_MESSAGE_CREATE` 的被测 Bot（例如 nonebot），本 echo bot 只适合手动验证。
+> botpy 1.2.1 只认识 `GROUP_AT_MESSAGE_CREATE`/`C2C_MESSAGE_CREATE`。群里默认开着
+> 「全量消息」时，@ 消息会以 `GROUP_MESSAGE_CREATE` 下发（botpy 只会打印
+> `_parser unknown event`，不会断线）。`mqs script run smoke` 建的群已经把
+> `recv_msg_setting` 设成 `only_mention`，所以 CI 里这个 echo bot 能直接收到
+> `GROUP_AT_MESSAGE_CREATE` 并回复；手工联调别的群时，先在聊天页右栏「群管理」把
+> **全量消息**关掉，@ 消息才会回到 `GROUP_AT_MESSAGE_CREATE`。
 
 ## 为什么需要 `mqs.compat.botpy`
 

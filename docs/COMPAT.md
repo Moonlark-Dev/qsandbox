@@ -124,3 +124,5 @@ QQ_BOTS=[{"id":"10000","token":"MQS_...","secret":"mqs-secret-10000","intent":{.
 （带前缀），普通消息不推。`mention_and_context` 目前按 `only_mention` 处理（沙箱不模拟上下文消息）。
 botpy 1.2.1 只注册了 `GROUP_AT_MESSAGE_CREATE` 解析器，用 `examples/botpy_echo` 联调时
 需要把该群的全量消息关掉，否则它只会打印 `_parser unknown event group_message_create`（连接不会断）。
+场景 YAML 里可以在群上写 `recv_msg_setting: only_mention`（对该群所有 Bot 生效），
+内置的 `smoke` 场景就是这么配的，所以 CI 里那个真实 botpy echo bot 能收到 @ 消息并回复。

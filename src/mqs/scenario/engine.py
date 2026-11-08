@@ -181,6 +181,16 @@ class ScenarioRunner:
                 member_ids=member_ids,
                 bot_ids=bot_ids,
             )
+            # Per-group receive setting, applied to every bot in the group.  A
+            # group defaults to "all" (全量消息), which delivers @ messages as
+            # GROUP_MESSAGE_CREATE; SDKs that only know GROUP_AT_MESSAGE_CREATE
+            # (botpy 1.2.1) need "only_mention" to ever see a group message.
+            recv_msg_setting = spec.get("recv_msg_setting")
+            if recv_msg_setting:
+                for bid in dict.fromkeys(bot_ids):
+                    await self.world.update_group_bot_settings(
+                        group["id"], bid, {"recv_msg_setting": recv_msg_setting}
+                    )
             self.groups[alias] = group["id"]
             self.vars[alias] = group["id"]
             self.vars[f"{alias}_conv"] = group["conversation_id"]

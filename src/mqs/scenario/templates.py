@@ -22,6 +22,10 @@ setup:
       owner: alice
       members: [alice]
       bots: ["10000"]
+      # 默认的全量消息（all）会把 @ 消息也下发成 GROUP_MESSAGE_CREATE，只认
+      # GROUP_AT_MESSAGE_CREATE 的 SDK（如 botpy 1.2.1）就收不到；冒烟要通用于
+      # 这类 SDK，所以这个群关掉全量消息，@ 回来才是 GROUP_AT_MESSAGE_CREATE。
+      recv_msg_setting: only_mention
 steps:
   - send:
       as: alice
@@ -29,7 +33,7 @@ steps:
       text: ping
       at_bots: ["10000"]
   - expect_event:
-      type: GROUP_MESSAGE_CREATE
+      type: GROUP_AT_MESSAGE_CREATE
       conversation: "group:{{room}}"
       content_contains: ping
       timeout: 3s
