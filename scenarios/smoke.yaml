@@ -24,7 +24,7 @@ steps:
       text: ping
       at_bots: ["10000"]
   - expect_event:
-      type: GROUP_AT_MESSAGE_CREATE
+      type: GROUP_MESSAGE_CREATE
       conversation: "group:{{room}}"
       content_contains: ping
       timeout: 3s

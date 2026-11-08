@@ -29,7 +29,7 @@ steps:
       text: ping
       at_bots: ["10000"]
   - expect_event:
-      type: GROUP_AT_MESSAGE_CREATE
+      type: GROUP_MESSAGE_CREATE
       conversation: "group:{{room}}"
       content_contains: ping
       timeout: 3s
@@ -347,7 +347,7 @@ steps:
       at_bots: ["10000"]
       reply_to: "{{last_message_id}}"
   - expect_event:
-      type: GROUP_AT_MESSAGE_CREATE
+      type: GROUP_MESSAGE_CREATE
       conversation: "group:{{room}}"
       content_contains: 引用第一条
       payload_contains: message_reference
@@ -388,7 +388,7 @@ steps:
 
 GROUP_MULTI = """\
 name: group_multi
-description: 群聊多用户：三个用户先后发言，Bot 侧收到三条 GROUP_AT_MESSAGE_CREATE
+description: 群聊多用户：三个用户先后发言，Bot 侧收到三条 GROUP_MESSAGE_CREATE
 setup:
   settings:
     rate_mode: "off"
@@ -412,7 +412,7 @@ steps:
       text: 我是甲
       at_bots: ["10000"]
   - expect_event:
-      type: GROUP_AT_MESSAGE_CREATE
+      type: GROUP_MESSAGE_CREATE
       conversation: "group:{{room}}"
       content_contains: 我是甲
       timeout: 3s
@@ -422,7 +422,7 @@ steps:
       text: 我是乙
       at_bots: ["10000"]
   - expect_event:
-      type: GROUP_AT_MESSAGE_CREATE
+      type: GROUP_MESSAGE_CREATE
       conversation: "group:{{room}}"
       content_contains: 我是乙
       timeout: 3s
@@ -432,7 +432,7 @@ steps:
       text: 我是丙
       at_bots: ["10000"]
   - expect_event:
-      type: GROUP_AT_MESSAGE_CREATE
+      type: GROUP_MESSAGE_CREATE
       conversation: "group:{{room}}"
       content_contains: 我是丙
       timeout: 3s

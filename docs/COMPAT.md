@@ -35,8 +35,8 @@ import mqs.compat.botpy   # 必须在创建 botpy.Client 之前 import
 |---|---|---|---|
 | 1 | 错误码 40034/40054/40055/40057 等为**近似值**（集中在 `src/mqs/errors.py`） | 依赖具体 code 的分支可能需要调整 | 真机抓包后改一张表即可；HTTP 状态码按 HTTP 语义给 |
 | 2 | 频道（guild）家族仅 **stub**：只返回结构，不做频道内事件/权限 | 频道机器人无法真正联调 | 见覆盖率表 §L2；v0.2 再做 |
-| 3 | 群消息事件分两类：被 @ 的 Bot 收 `GROUP_AT_MESSAGE_CREATE`（`content` 带 `<@!openid>`）；群内其它 Bot 在「全量消息」开启（`bot_state.recv_msg_setting = all`）时收 `GROUP_MESSAGE_CREATE`（无前缀），关闭（`only_mention`）时不收；两者共用 intent `1<<25` | 类似真实平台的全量消息权限：只有开了全量消息的 Bot 才能收到未 @ 它的消息 | 群聊侧边栏「群管理」里有全量消息开关（写 `recv_msg_setting`）；控制 API 的 `chat.auto_at_bot` 仍可让所有群消息都按 @ 消息投递 |
-| 4 | Bot 接收的群 @ 消息 `content` 带 `<@!openid>` 前缀 | 直接回显会把 @ 标记带出去 | 与真实 @ 语义一致；SDK 侧建议 `re.sub(r"<@![^>]+>", "", content)` |
+| 3 | 群消息事件由该群里的「全量消息」开关（`bot_state.recv_msg_setting`）决定，与真实平台一致：`all`（默认）时**所有**群消息——含 @ 该 Bot 的——都以 `GROUP_MESSAGE_CREATE` 下发，@ 只由 `mentions[].is_you` 表示、`content` 不带前缀；`only_mention` 时只下发 @ 消息的 `GROUP_AT_MESSAGE_CREATE`（`content` 带 `<@!openid>` 前缀），普通消息不投递。两者共用 intent `1<<25` | 只认 `GROUP_AT_MESSAGE_CREATE` 的老 SDK（如 botpy 1.2.1）在全量消息开启时收不到 @ 消息，需要把开关关掉 | 群聊侧边栏「群管理」有全量消息开关（写 `recv_msg_setting`）；控制 API 的 `chat.auto_at_bot` 仍可让所有群消息都按 @ 处理 |
+| 4 | `only_mention` 模式下 Bot 接收的群 @ 消息 `content` 带 `<@!openid>` 前缀 | 直接回显会把 @ 标记带出去 | 与真实 @ 语义一致；SDK 侧建议 `re.sub(r"<@![^>]+>", "", content)` |
 | 5 | 未显式给 `msg_seq` 时**自动递增** | 比真实平台宽松（真实平台默认 1，重复会失败） | 显式传 `msg_seq` 时严格去重（40054） |
 | 6 | `file_type=4`（普通文件）不支持 | 上传普通文件会 400 | 官方也标注“暂不开放” |
 | 7 | 被动回复窗口 / 配额受**虚拟时钟**控制 | 快进时钟后 token 也会过期 | 这是设计目标，不是差异 |
@@ -118,6 +118,9 @@ QQ_BOTS=[{"id":"10000","token":"MQS_...","secret":"mqs-secret-10000","intent":{.
 （1.7.2 之前没有这些字段，会忽略多余的键），与真实平台事件一致。缺字段时适配器会直接报
 `author.bot Field required` 之类的校验错误。
 
-「全量消息」按 `nonebot-adapter-qq` 的真实语义工作：`recv_msg_setting=all` 的 Bot 除了
-`GROUP_AT_MESSAGE_CREATE` 外还会收到未 @ 它的 `GROUP_MESSAGE_CREATE`；`only_mention`
-只收 @ 事件。`mention_and_context` 目前按 `only_mention` 处理（沙箱不模拟上下文消息）。
+「全量消息」按真实语义工作：`recv_msg_setting=all`（默认）的 Bot 收到的**每一条**群消息
+都是 `GROUP_MESSAGE_CREATE`——包括 @ 它的消息，`content` 不带 `<@!openid>` 前缀，@ 由
+`mentions[].is_you=true` 表示；`only_mention` 时只收 @ 消息的 `GROUP_AT_MESSAGE_CREATE`
+（带前缀），普通消息不推。`mention_and_context` 目前按 `only_mention` 处理（沙箱不模拟上下文消息）。
+botpy 1.2.1 只注册了 `GROUP_AT_MESSAGE_CREATE` 解析器，用 `examples/botpy_echo` 联调时
+需要把该群的全量消息关掉，否则它只会打印 `_parser unknown event group_message_create`（连接不会断）。

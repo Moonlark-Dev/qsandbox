@@ -23,7 +23,7 @@ steps:
       text: 引用第一条
       reply_to: "{{last_message_id}}"
   - expect_event:
-      type: GROUP_AT_MESSAGE_CREATE
+      type: GROUP_MESSAGE_CREATE
       conversation: "group:{{room}}"
       content_contains: 引用第一条
       payload_contains: message_reference

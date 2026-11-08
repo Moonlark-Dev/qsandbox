@@ -116,14 +116,21 @@ async def echo_bot(mqs: MQS) -> AsyncIterator[asyncio.Task]:
                     frame = json.loads(raw)
                     if frame.get("op") != 0 or frame.get("t") not in (
                         "GROUP_AT_MESSAGE_CREATE",
+                        "GROUP_MESSAGE_CREATE",
                         "C2C_MESSAGE_CREATE",
                     ):
                         continue
                     data = frame["d"]
                     import re
 
+                    is_at = frame["t"] == "GROUP_AT_MESSAGE_CREATE"
+                    if frame["t"] == "GROUP_MESSAGE_CREATE":
+                        # full-message mode: only answer when this bot was @'d
+                        is_at = any(m.get("is_you") for m in data.get("mentions") or [])
+                        if not is_at:
+                            continue
                     text = re.sub(r"<@![^>]+>", "", data.get("content", "")).strip()
-                    if frame["t"] == "GROUP_AT_MESSAGE_CREATE":
+                    if frame["t"] in ("GROUP_AT_MESSAGE_CREATE", "GROUP_MESSAGE_CREATE"):
                         url = f"/v2/groups/{data['group_openid']}/messages"
                     else:
                         url = f"/v2/users/{data['author']['user_openid']}/messages"

@@ -44,7 +44,7 @@ async def test_upload_and_group_rich_message(mqs) -> None:
             assert message["msg_type"] == 7
             assert message["attachments"][0]["url"] == media["url"]
         frame = json.loads(await asyncio.wait_for(ws.recv(), 3))
-        assert frame["t"] == "GROUP_AT_MESSAGE_CREATE"
+        assert frame["t"] == "GROUP_MESSAGE_CREATE"
         assert frame["d"]["attachments"][0]["content_type"] == "image/png"
         assert frame["d"]["attachments"][0]["url"] == media["url"]
     finally:

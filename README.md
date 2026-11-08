@@ -100,8 +100,8 @@ CI 会在三平台各跑一次 `tools/smoke_sidecar.py`，并解包检查 `tools
 |---|---|
 | **鉴权** | `getAppAccessToken`、`Authorization: QQBot <token>`、7200s 过期、错误码 |
 | **网关** | hello / identify / ready / heartbeat / resume / invalid session、intents、分片、断线补发 |
-| **群 / C2C** | 文本/markdown/keyboard/ark/embed/媒体、被动窗口与次数、`msg_id+msg_seq` 去重、引用、撤回、按钮点击（指令/回调/链接）；**未选择 Bot 时默认不 @ 任何 Bot** |
-| **群管理** | 群基本信息、机器人群内状态（主动消息开关）、成员禁言（add/update/del）、黑名单、入群申请列表与审批、批量移除 |
+| **群 / C2C** | 文本/markdown/keyboard/ark/embed/媒体、被动窗口与次数、`msg_id+msg_seq` 去重、引用、撤回、按钮点击（指令/回调/链接）；**未选择 Bot 时默认不 @ 任何 Bot**；全量消息开关决定 @ 消息走 `GROUP_MESSAGE_CREATE`（`mentions.is_you`）还是 `GROUP_AT_MESSAGE_CREATE` |
+| **群管理** | 群基本信息、机器人群内状态（主动消息 / 全量消息开关）、成员禁言（add/update/del）、黑名单、入群申请列表与审批、批量移除 |
 | **频道 L2** | guild / channel / member / role、频道消息、`MESSAGE_CREATE` / `AT_MESSAGE_CREATE`、频道频控；**子频道创建/改名/删除**、身份组 CRUD 与成员分配、成员禁言/踢出、全员禁言 |
 | **频道私信** | `POST /users/@me/dms` 建会话、`/dms/{guild_id}/messages` 收发与撤回、`DIRECT_MESSAGE_CREATE`、2 条/天/用户 + 200 条/天/Bot 主动限额 |
 | **好友** | `FRIEND_ADD` / `FRIEND_DEL` 事件、好友列表与关系校验（可选主动消息前置条件） |

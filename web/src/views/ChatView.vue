@@ -329,8 +329,8 @@ async function toggleGroupFullMessage() {
     })
     toast(
       botState.value.recv_msg_setting === 'all'
-        ? '已开启全量消息：未 @ 的群消息也会以 GROUP_MESSAGE_CREATE 推送'
-        : '已关闭全量消息：只推送 @ 该 Bot 的 GROUP_AT_MESSAGE_CREATE',
+        ? '已开启全量消息：所有群消息（含 @）都以 GROUP_MESSAGE_CREATE 推送'
+        : '已关闭全量消息：@ 消息改推 GROUP_AT_MESSAGE_CREATE，普通消息不推送',
     )
   } catch (error) {
     toast(error instanceof Error ? error.message : String(error))
@@ -764,7 +764,7 @@ function isImage(att: any): boolean {
           </button>
           <button
             class="btn small"
-            title="开启后，未 @ 该 Bot 的群消息也会以 GROUP_MESSAGE_CREATE 推送"
+            title="开：所有群消息都以 GROUP_MESSAGE_CREATE 推送（@ 由 mentions.is_you 表示）；关：只推 @ 消息的 GROUP_AT_MESSAGE_CREATE"
             @click="toggleGroupFullMessage"
           >
             {{ botState?.recv_msg_setting === 'all' ? '全量消息：开' : '全量消息：关' }}

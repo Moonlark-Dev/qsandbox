@@ -1377,16 +1377,16 @@ class World(CommunityMixin):
             )
             for bot in bot_rows:
                 if conv["type"] == "group":
-                    # The @'d bot keeps receiving GROUP_AT_MESSAGE_CREATE (with
-                    # the <@!openid> prefix).  Bots whose in-group receive
-                    # setting is "all" (全量消息) also receive every other
-                    # message as GROUP_MESSAGE_CREATE; bots set to
-                    # only_mention stay silent until they are @'d.
+                    # In-group receive setting decides the event kind, as on
+                    # real QQ: "all" (全量消息) delivers every message as
+                    # GROUP_MESSAGE_CREATE — @ messages included, with the
+                    # mention only carried by `mentions[].is_you`; "only_mention"
+                    # delivers nothing but GROUP_AT_MESSAGE_CREATE for an @.
                     mentioned = bot["id"] in target_bot_ids
-                    if mentioned:
-                        bot_event_type = "GROUP_AT_MESSAGE_CREATE"
-                    elif str(bot["recv_msg_setting"] or "all") == "all":
+                    if str(bot["recv_msg_setting"] or "all") == "all":
                         bot_event_type = "GROUP_MESSAGE_CREATE"
+                    elif mentioned:
+                        bot_event_type = "GROUP_AT_MESSAGE_CREATE"
                     else:
                         continue
                 else:
@@ -1426,7 +1426,7 @@ class World(CommunityMixin):
                     payload["group_openid"] = group_openid
                     payload["group_id"] = conv["peer_id"]
                     explicit = at_bots is None or bot["id"] in at_bots
-                    if mentioned and explicit:
+                    if bot_event_type == "GROUP_AT_MESSAGE_CREATE" and explicit:
                         bot_openid = openid_for(bot["app_id"], "bot", bot["id"])
                         payload["content"] = f"<@!{bot_openid}> {content}" if content else f"<@!{bot_openid}>"
                 else:
@@ -1469,12 +1469,12 @@ class World(CommunityMixin):
         out = await self.message_out(message)  # type: ignore[arg-type]
         for bot_id, seq_no, payload, bot, delivered_type in deliveries:
             await self._deliver(bot_id, seq_no, delivered_type, event_id, payload, bot, conversation_id)
-        delivered_types = [d[4] for d in deliveries]
-        # Rule engine trigger: prefer the @ event when both kinds were sent.
-        event_type = next(
-            (kind for kind in delivered_types if kind != "GROUP_MESSAGE_CREATE"),
-            "GROUP_MESSAGE_CREATE" if conv["type"] == "group" else "C2C_MESSAGE_CREATE",
-        )
+        # Rule engine trigger keeps the pre-full-message semantics: an @ message
+        # is an "at" trigger even when the gateway event is GROUP_MESSAGE_CREATE.
+        if conv["type"] == "group":
+            event_type = "GROUP_AT_MESSAGE_CREATE" if target_bot_ids else "GROUP_MESSAGE_CREATE"
+        else:
+            event_type = "C2C_MESSAGE_CREATE"
         await self.hub.publish({"kind": "message", "conversation_id": conversation_id, "message": out})
         await self._maybe_run_rules(event_type, payload=deliveries[0][2] if deliveries else {}, conversation_id=conversation_id)
         return {"message": out, "event_ids": [event_id], "delivered_to": [d[0] for d in deliveries]}
