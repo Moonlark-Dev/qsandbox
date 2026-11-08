@@ -70,8 +70,9 @@ artifacts = ["web/dist/**"]
 [tool.hatch.build.targets.wheel]
 packages = ["src/mqs"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"web/dist" = "mqs/web/dist"
+# Adds web/dist to the wheel only when it exists; see hatch_build.py for why an
+# editable install must not require a frontend build.
+[tool.hatch.build.hooks.custom]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
