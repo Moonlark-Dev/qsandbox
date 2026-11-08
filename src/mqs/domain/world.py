@@ -1329,9 +1329,8 @@ class World(CommunityMixin):
                 raise MessageNotFound("reply_to message not found in this conversation")
             reply_ref = reply_to
 
-        event_type = "GROUP_AT_MESSAGE_CREATE" if conv["type"] == "group" else "C2C_MESSAGE_CREATE"
         event_id = new_event_id()
-        deliveries: list[tuple[str, int, dict[str, Any], dict[str, Any]]] = []
+        deliveries: list[tuple[str, int, dict[str, Any], dict[str, Any], str]] = []
         async with self.db.tx() as conn:
             cur = await conn.execute("UPDATE conversations SET last_seq=last_seq+1 WHERE id=?", (conversation_id,))
             await cur.close()
@@ -1356,8 +1355,18 @@ class World(CommunityMixin):
                  json.dumps(raw_message, ensure_ascii=False), sent_at),
             )
             for bot in bot_rows:
-                if bot["id"] not in target_bot_ids:
-                    continue
+                if conv["type"] == "group":
+                    # A group message without an @ is still pushed to the bots in
+                    # the group, as QQ's full-message event.  The @'d bot keeps
+                    # receiving GROUP_AT_MESSAGE_CREATE (with the <@!openid>
+                    # prefix); everybody else gets GROUP_MESSAGE_CREATE.
+                    mentioned = bot["id"] in target_bot_ids
+                    bot_event_type = "GROUP_AT_MESSAGE_CREATE" if mentioned else "GROUP_MESSAGE_CREATE"
+                else:
+                    if bot["id"] not in target_bot_ids:
+                        continue
+                    mentioned = False
+                    bot_event_type = "C2C_MESSAGE_CREATE"
                 group_openid = None
                 if conv["type"] == "group":
                     group_openid = await self._openid_tx(conn, bot, "group", conv["peer_id"])
@@ -1381,7 +1390,7 @@ class World(CommunityMixin):
                     payload["group_openid"] = group_openid
                     payload["group_id"] = conv["peer_id"]
                     explicit = at_bots is None or bot["id"] in at_bots
-                    if bot["id"] in target_bot_ids and explicit:
+                    if mentioned and explicit:
                         bot_openid = openid_for(bot["app_id"], "bot", bot["id"])
                         payload["content"] = f"<@!{bot_openid}> {content}" if content else f"<@!{bot_openid}>"
                 else:
@@ -1394,15 +1403,21 @@ class World(CommunityMixin):
                 cur = await conn.execute(
                     "INSERT INTO events(event_id,type,payload_json,conversation_id,target_bot_id,created_at)"
                     " VALUES(?,?,?,?,?,?)",
-                    (event_id, event_type, json.dumps(payload, ensure_ascii=False), conversation_id, bot["id"], sent_at),
+                    (event_id, bot_event_type, json.dumps(payload, ensure_ascii=False), conversation_id, bot["id"], sent_at),
                 )
-                deliveries.append((bot["id"], int(cur.lastrowid or 0), payload, dict(bot), event_type))
+                deliveries.append((bot["id"], int(cur.lastrowid or 0), payload, dict(bot), bot_event_type))
                 await cur.close()
 
         message = await self.db.fetchone("SELECT * FROM messages WHERE msg_id=?", (msg_id,))
         out = await self.message_out(message)  # type: ignore[arg-type]
         for bot_id, seq_no, payload, bot, delivered_type in deliveries:
             await self._deliver(bot_id, seq_no, delivered_type, event_id, payload, bot, conversation_id)
+        delivered_types = [d[4] for d in deliveries]
+        # Rule engine trigger: prefer the @ event when both kinds were sent.
+        event_type = next(
+            (kind for kind in delivered_types if kind != "GROUP_MESSAGE_CREATE"),
+            "GROUP_MESSAGE_CREATE" if conv["type"] == "group" else "C2C_MESSAGE_CREATE",
+        )
         await self.hub.publish({"kind": "message", "conversation_id": conversation_id, "message": out})
         await self._maybe_run_rules(event_type, payload=deliveries[0][2] if deliveries else {}, conversation_id=conversation_id)
         return {"message": out, "event_ids": [event_id], "delivered_to": [d[0] for d in deliveries]}

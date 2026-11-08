@@ -35,8 +35,8 @@ import mqs.compat.botpy   # 必须在创建 botpy.Client 之前 import
 |---|---|---|---|
 | 1 | 错误码 40034/40054/40055/40057 等为**近似值**（集中在 `src/mqs/errors.py`） | 依赖具体 code 的分支可能需要调整 | 真机抓包后改一张表即可；HTTP 状态码按 HTTP 语义给 |
 | 2 | 频道（guild）家族仅 **stub**：只返回结构，不做频道内事件/权限 | 频道机器人无法真正联调 | 见覆盖率表 §L2；v0.2 再做 |
-| 3 | 群消息事件只有 `GROUP_AT_MESSAGE_CREATE`；群内未 @ Bot 的消息不投递 | 与真实 QQ 群机器人一致（群机器人只能收 @ 消息） | 控制 API 有 `chat.auto_at_bot` 开关方便 GUI 调试 |
-| 4 | Bot 接收的群消息 `content` 带 `<@!openid>` 前缀 | 直接回显会把 @ 标记带出去 | 与真实 @ 语义一致；SDK 侧建议 `re.sub(r"<@![^>]+>", "", content)` |
+| 3 | 群消息事件分两类：被 @ 的 Bot 收 `GROUP_AT_MESSAGE_CREATE`（`content` 带 `<@!openid>`），群内其余 Bot 收 `GROUP_MESSAGE_CREATE`（无前缀）；两者共用 intent `1<<25` | 只想处理 @ 消息的 Bot 需要自行忽略 `GROUP_MESSAGE_CREATE` | 无需申请「全量消息」权限；控制 API 的 `chat.auto_at_bot` 仍可让所有群消息都按 @ 消息投递 |
+| 4 | Bot 接收的群 @ 消息 `content` 带 `<@!openid>` 前缀 | 直接回显会把 @ 标记带出去 | 与真实 @ 语义一致；SDK 侧建议 `re.sub(r"<@![^>]+>", "", content)` |
 | 5 | 未显式给 `msg_seq` 时**自动递增** | 比真实平台宽松（真实平台默认 1，重复会失败） | 显式传 `msg_seq` 时严格去重（40054） |
 | 6 | `file_type=4`（普通文件）不支持 | 上传普通文件会 400 | 官方也标注“暂不开放” |
 | 7 | 被动回复窗口 / 配额受**虚拟时钟**控制 | 快进时钟后 token 也会过期 | 这是设计目标，不是差异 |

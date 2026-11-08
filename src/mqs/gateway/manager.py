@@ -30,6 +30,7 @@ OP_HTTP_CALLBACK_ACK = 12
 # event -> required intent bit
 INTENT_BY_EVENT: dict[str, int] = {
     "GROUP_AT_MESSAGE_CREATE": 1 << 25,
+    "GROUP_MESSAGE_CREATE": 1 << 25,
     "C2C_MESSAGE_CREATE": 1 << 25,
     "GROUP_ADD_ROBOT": 1 << 25,
     "GROUP_DEL_ROBOT": 1 << 25,

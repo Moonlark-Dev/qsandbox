@@ -204,6 +204,10 @@ async def test_mention_only_delivered_to_mentioned_bot(mqs) -> None:
     events = await mqs.world.list_events()
     group_events = [e for e in events if e["type"] == "GROUP_AT_MESSAGE_CREATE"]
     assert {e["target_bot_id"] for e in group_events} == {"10001"}
+    # the other bot in the group still sees the message, as a full-message event
+    full_events = [e for e in events if e["type"] == "GROUP_MESSAGE_CREATE"]
+    assert {e["target_bot_id"] for e in full_events} == {"10000"}
+    assert full_events[0]["payload"]["content"] == "only 10001"
 
 
 async def test_keyboard_click_command_and_callback(mqs) -> None:
@@ -313,10 +317,30 @@ async def test_keyboard_click_command_and_callback(mqs) -> None:
 async def test_group_message_without_bot_mention(mqs) -> None:
     conversation = f"group:{await mqs.group_id()}"
     result = await _send_user(mqs, "just chatting", at_bots=[])
-    assert result["delivered_to"] == []
-    events = [e for e in await mqs.world.list_events() if e["type"] == "GROUP_AT_MESSAGE_CREATE"]
-    assert events == []
+    assert result["delivered_to"] == ["10000"]
+    events = await mqs.world.list_events()
+    at_events = [e for e in events if e["type"] == "GROUP_AT_MESSAGE_CREATE"]
+    assert at_events == []
+    full_events = [e for e in events if e["type"] == "GROUP_MESSAGE_CREATE"]
+    assert [e["target_bot_id"] for e in full_events] == ["10000"]
+    payload = full_events[0]["payload"]
+    assert payload["content"] == "just chatting"
+    assert not payload["content"].startswith("<@!")
+    assert payload["group_id"] == await mqs.group_id()
     assert (await mqs.last_inbound(conversation))["content"] == "just chatting"
+
+
+async def test_group_message_without_mention_reaches_gateway(mqs) -> None:
+    ws, ready, token = await mqs.connect_gateway()
+    try:
+        await _send_user(mqs, "plain group text", at_bots=[])
+        frame = json.loads(await ws.recv())
+        assert frame["t"] == "GROUP_MESSAGE_CREATE"
+        assert frame["d"]["content"] == "plain group text"
+        assert frame["d"]["group_id"] == await mqs.group_id()
+        assert len(frame["d"]["group_openid"]) == 32
+    finally:
+        await ws.close()
 
 
 async def test_c2c_passive_window_60min_and_4_replies(mqs) -> None:
