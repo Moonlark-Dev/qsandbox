@@ -421,6 +421,74 @@ async def test_group_mentions_carry_full_group_mention_shape(mqs) -> None:
     assert mention["member_openid"] == mention["id"]
 
 
+async def test_group_mentions_carry_mentioned_bot(mqs) -> None:
+    """An @'d Bot is a GroupMentionUser with ``bot`` set and ``is_you`` scoped
+    per recipient: true for the Bot itself, false for the other Bots in the group."""
+    async with httpx.AsyncClient(base_url=mqs.control_base, headers=mqs.headers) as client:
+        assert (await client.post("/_mqs/bots", json={"app_id": "10001", "name": "Second Bot"})).status_code == 200
+        gid = await mqs.group_id()
+        assert (await client.post(f"/_mqs/groups/{gid}/bots/10001")).status_code == 200
+    await _send_user(mqs, "only 10001", at_bots=["10001"])
+    events = await mqs.world.list_events()
+    at_event = next(
+        e for e in events if e["type"] == "GROUP_AT_MESSAGE_CREATE" and e["target_bot_id"] == "10001"
+    )
+    at_mention = at_event["payload"]["mentions"][0]
+    assert at_mention["scope"] == "single"
+    assert at_mention["bot"] is True
+    assert at_mention["is_you"] is True
+    assert at_mention["username"] == "Second Bot"
+    assert at_mention["member_openid"] == at_mention["id"]
+    full_event = next(
+        e for e in events if e["type"] == "GROUP_MESSAGE_CREATE" and e["target_bot_id"] == "10000"
+    )
+    full_mention = full_event["payload"]["mentions"][0]
+    assert full_mention["bot"] is True
+    assert full_mention["is_you"] is False
+    assert full_mention["id"] == at_mention["id"]
+
+
+async def test_only_mention_setting_stops_full_group_messages(mqs) -> None:
+    """The 全量消息 switch is group_bots.recv_msg_setting: all vs only_mention."""
+    gid = await mqs.group_id()
+    conversation = f"group:{gid}"
+    user = await mqs.user_id()
+    async with httpx.AsyncClient(base_url=mqs.control_base, headers=mqs.headers) as client:
+        state = await client.patch(f"/_mqs/groups/{gid}/bots/10000", json={"recv_msg_setting": "only_mention"})
+        assert state.status_code == 200, state.text
+        assert state.json()["recv_msg_setting"] == "only_mention"
+
+        quiet = await client.post(
+            "/_mqs/chat/send", json={"as_user": user, "to": conversation, "content": "quiet", "at_bots": []}
+        )
+        assert quiet.status_code == 200
+        assert quiet.json()["delivered_to"] == []
+        assert (await mqs.last_inbound(conversation))["content"] == "quiet"
+
+        mentioned = await client.post(
+            "/_mqs/chat/send",
+            json={"as_user": user, "to": conversation, "content": "hey", "at_bots": ["10000"]},
+        )
+        assert mentioned.status_code == 200
+        assert mentioned.json()["delivered_to"] == ["10000"]
+
+        events = [
+            e["type"]
+            for e in await mqs.world.list_events()
+            if e["conversation_id"] == conversation
+            and e["type"] in ("GROUP_AT_MESSAGE_CREATE", "GROUP_MESSAGE_CREATE")
+        ]
+        assert events == ["GROUP_AT_MESSAGE_CREATE"]
+
+        state = await client.patch(f"/_mqs/groups/{gid}/bots/10000", json={"recv_msg_setting": "all"})
+        assert state.status_code == 200
+        loud = await client.post(
+            "/_mqs/chat/send", json={"as_user": user, "to": conversation, "content": "loud", "at_bots": []}
+        )
+        assert loud.status_code == 200
+        assert loud.json()["delivered_to"] == ["10000"]
+
+
 async def test_c2c_passive_window_60min_and_4_replies(mqs) -> None:
     ws, ready, token = await mqs.connect_gateway()
     headers = {"Authorization": f"QQBot {token}"}

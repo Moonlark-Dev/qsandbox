@@ -318,6 +318,25 @@ async function toggleGroupProactive() {
   }
 }
 
+async function toggleGroupFullMessage() {
+  if (!activeGroup.value || !botState.value) return
+  const bot = groupBots.value[0]
+  if (!bot) return
+  const full = botState.value.recv_msg_setting === 'all'
+  try {
+    botState.value = await api.patch(`/_mqs/groups/${activeGroup.value.id}/bots/${bot.id}`, {
+      recv_msg_setting: full ? 'only_mention' : 'all',
+    })
+    toast(
+      botState.value.recv_msg_setting === 'all'
+        ? '已开启全量消息：未 @ 的群消息也会以 GROUP_MESSAGE_CREATE 推送'
+        : '已关闭全量消息：只推送 @ 该 Bot 的 GROUP_AT_MESSAGE_CREATE',
+    )
+  } catch (error) {
+    toast(error instanceof Error ? error.message : String(error))
+  }
+}
+
 async function addBlacklist(userId: string) {
   if (!activeGroup.value || !userId) return
   try {
@@ -742,6 +761,13 @@ function isImage(att: any): boolean {
         <div class="row wrap" style="margin-bottom: 8px">
           <button class="btn small" @click="toggleGroupProactive">
             {{ botState?.allow_proactive_msg ? '主动消息：开' : '主动消息：关' }}
+          </button>
+          <button
+            class="btn small"
+            title="开启后，未 @ 该 Bot 的群消息也会以 GROUP_MESSAGE_CREATE 推送"
+            @click="toggleGroupFullMessage"
+          >
+            {{ botState?.recv_msg_setting === 'all' ? '全量消息：开' : '全量消息：关' }}
           </button>
           <button class="btn small" @click="simulateJoinRequest">模拟入群申请</button>
         </div>

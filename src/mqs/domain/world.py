@@ -1293,7 +1293,9 @@ class World(CommunityMixin):
             if int(member["mute_until"] or 0) > self.clock.now_ms():
                 raise NoPermission("user is muted in this group")
             bot_rows = await self.db.fetchall(
-                "SELECT b.* FROM group_bots gb JOIN bots b ON b.id=gb.bot_id WHERE gb.group_id=?", (conv["peer_id"],)
+                "SELECT b.*, gb.recv_msg_setting AS recv_msg_setting FROM group_bots gb "
+                "JOIN bots b ON b.id=gb.bot_id WHERE gb.group_id=?",
+                (conv["peer_id"],),
             )
             mention_ids = list(dict.fromkeys(list(mentions or []) + list(at_bots or [])))
             if implicit_bots is not None:
@@ -1307,8 +1309,11 @@ class World(CommunityMixin):
             else:
                 target_bot_ids = []
             mentioned_users: list[tuple[str, str]] = []
+            mentioned_bots: list[tuple[str, str, str]] = []
             for mid in mention_ids:
-                if any(r["id"] == mid for r in bot_rows):
+                bot_row = next((r for r in bot_rows if r["id"] == mid), None)
+                if bot_row is not None:
+                    mentioned_bots.append((mid, bot_row["app_id"], bot_row["name"] or mid))
                     continue
                 row = await self.db.fetchone(
                     "SELECT u.nickname FROM group_members gm JOIN users u ON u.id=gm.user_id "
@@ -1323,6 +1328,7 @@ class World(CommunityMixin):
             bot_rows = await self.db.fetchall("SELECT * FROM bots WHERE id=?", (conv["bot_id"],))
             target_bot_ids = [r["id"] for r in bot_rows]
             mentioned_users = []
+            mentioned_bots = []
 
         if not bot_rows:
             raise InvalidParam("no bot is present in this conversation")
@@ -1371,12 +1377,18 @@ class World(CommunityMixin):
             )
             for bot in bot_rows:
                 if conv["type"] == "group":
-                    # A group message without an @ is still pushed to the bots in
-                    # the group, as QQ's full-message event.  The @'d bot keeps
-                    # receiving GROUP_AT_MESSAGE_CREATE (with the <@!openid>
-                    # prefix); everybody else gets GROUP_MESSAGE_CREATE.
+                    # The @'d bot keeps receiving GROUP_AT_MESSAGE_CREATE (with
+                    # the <@!openid> prefix).  Bots whose in-group receive
+                    # setting is "all" (全量消息) also receive every other
+                    # message as GROUP_MESSAGE_CREATE; bots set to
+                    # only_mention stay silent until they are @'d.
                     mentioned = bot["id"] in target_bot_ids
-                    bot_event_type = "GROUP_AT_MESSAGE_CREATE" if mentioned else "GROUP_MESSAGE_CREATE"
+                    if mentioned:
+                        bot_event_type = "GROUP_AT_MESSAGE_CREATE"
+                    elif str(bot["recv_msg_setting"] or "all") == "all":
+                        bot_event_type = "GROUP_MESSAGE_CREATE"
+                    else:
+                        continue
                 else:
                     if bot["id"] not in target_bot_ids:
                         continue
@@ -1429,6 +1441,18 @@ class World(CommunityMixin):
                             "is_you": False,
                             "member_openid": mrow,
                             "username": nickname,
+                        }
+                    )
+                for mid, app_id, name in mentioned_bots:
+                    mrow = openid_for(app_id, "bot", mid)
+                    payload["mentions"].append(
+                        {
+                            "scope": "single",
+                            "bot": True,
+                            "id": mrow,
+                            "is_you": mid == bot["id"],
+                            "member_openid": mrow,
+                            "username": name,
                         }
                     )
                 if reply_ref:
