@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { api, formatBytes, formatDuration } from '../api'
-import { refreshStatus, state, toast } from '../store'
+import { gotoBotConfig, refreshStatus, refreshWorld, state, toast } from '../store'
 
 const tokenInfo = ref<{ access_token: string; app_id: string } | null>(null)
 const profiles = ref<any[]>([])
@@ -9,7 +9,16 @@ const busy = ref(false)
 const desktopBridge = (window as any).mqsDesktop
 
 const status = computed(() => state.status)
+const bots = computed(() => state.bots)
 const primaryBot = computed(() => state.bots[0])
+const onlineBotIds = computed(() => new Set(status.value?.gateway.bots ?? []))
+const connectionCounts = computed(() => {
+  const counts = new Map<string, number>()
+  for (const shard of status.value?.gateway.shards ?? []) {
+    counts.set(shard.bot_id, (counts.get(shard.bot_id) ?? 0) + 1)
+  }
+  return counts
+})
 const coverage = computed(() => status.value?.coverage)
 const coveragePercent = computed(() => {
   if (!coverage.value) return 0
@@ -18,8 +27,27 @@ const coveragePercent = computed(() => {
 })
 
 onMounted(async () => {
-  await Promise.all([loadProfiles(), refreshStatus()])
+  await Promise.all([loadProfiles(), refreshStatus(), refreshWorld()])
 })
+
+function isOnline(bot: any): boolean {
+  // 有实时 status 时以网关连接为准，否则退回 /_mqs/bots 返回的快照字段
+  if (status.value) return onlineBotIds.value.has(bot.id)
+  return Boolean(bot.online)
+}
+
+function connectionCount(bot: any): number {
+  return connectionCounts.value.get(bot.id) ?? (isOnline(bot) ? 1 : 0)
+}
+
+function openConnectInfo() {
+  if (!primaryBot.value) return
+  gotoBotConfig(primaryBot.value.id)
+}
+
+function gotoConfig() {
+  gotoBotConfig()
+}
 
 async function switchProfile(name: string) {
   if (!desktopBridge?.switchProfile) return
@@ -127,6 +155,23 @@ async function setClockReal() {
         <p class="small faint" style="margin: 12px 0 0">
           假凭据以 <code class="mono">MQS_</code> / <code class="mono">mqs-</code> 开头，方便一眼识别。
         </p>
+
+        <div class="panel-section-title" style="margin: 16px 0 6px">Bot 连接状态</div>
+        <div v-for="bot in bots" :key="bot.id" class="member-row">
+          <span class="dot" :class="isOnline(bot) ? 'on' : 'off'"></span>
+          <img class="avatar sm" :src="bot.avatar" alt="" />
+          <span>{{ bot.name }}</span>
+          <span class="mono small faint">{{ bot.app_id }}</span>
+          <span class="spacer"></span>
+          <span v-if="isOnline(bot)" class="small faint">{{ connectionCount(bot) }} 个连接</span>
+          <span class="tag" :class="isOnline(bot) ? 'ok' : ''">{{ isOnline(bot) ? '在线' : '离线' }}</span>
+        </div>
+        <div v-if="!bots.length" class="small faint">暂无 Bot</div>
+
+        <div class="row wrap" style="margin-top: 14px">
+          <button class="btn small primary" :disabled="!primaryBot" @click="openConnectInfo">打开接入信息</button>
+          <button class="btn small" @click="gotoConfig">转到 Bot 配置</button>
+        </div>
       </div>
 
       <div class="card">

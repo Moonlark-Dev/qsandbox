@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { setToken } from './api'
-import { bootstrap, refreshStatus, refreshWorld, state } from './store'
+import { bootstrap, refreshStatus, refreshWorld, state, uiIntent } from './store'
 import TextPrompt from './components/TextPrompt.vue'
 import StatusView from './views/StatusView.vue'
 import ConfigView from './views/ConfigView.vue'
@@ -30,6 +30,15 @@ const view = ref<string>(localStorage.getItem('mqs-view') || 'status')
 watch(view, (value) => localStorage.setItem('mqs-view', value))
 
 const current = computed(() => tabs.find((tab) => tab.id === view.value) || tabs[0])
+
+// 跨视图跳转：状态页等发起的“转到 Bot 配置 / 打开接入信息”由这里切换主视图
+watch(
+  () => uiIntent.seq,
+  () => {
+    const target = uiIntent.intent?.view
+    if (target && views[target]) view.value = target
+  },
+)
 const tokenInput = ref('')
 const loggingIn = ref(false)
 const settingsOpen = ref(false)

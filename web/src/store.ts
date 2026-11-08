@@ -42,6 +42,26 @@ export const state = reactive({
   toast: '',
 })
 
+export interface UiIntent {
+  view: string
+  configTab?: string
+  botId?: string
+  openConnect?: boolean
+}
+
+/** 跨视图跳转意图：任何视图写入，App 负责切换页面，目标视图负责消费。 */
+export const uiIntent = reactive<{ seq: number; intent: UiIntent | null }>({ seq: 0, intent: null })
+
+export function navigateTo(intent: UiIntent): void {
+  uiIntent.intent = intent
+  uiIntent.seq += 1
+}
+
+/** 跳到 配置 → Bot；带 botId 时顺便打开该 Bot 的接入信息弹窗。 */
+export function gotoBotConfig(botId?: string): void {
+  navigateTo({ view: 'config', configTab: 'bots', botId, openConnect: Boolean(botId) })
+}
+
 type Listener = (data: any) => void
 const messageListeners = new Set<Listener>()
 const eventListeners = new Set<(event: any) => void>()

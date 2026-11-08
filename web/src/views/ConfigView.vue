@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { api } from '../api'
 import { askText } from '../dialog'
-import { patchSettings, refreshAll, refreshWorld, state, toast } from '../store'
+import { patchSettings, refreshAll, refreshWorld, state, toast, uiIntent } from '../store'
 
 const tab = ref<'users' | 'groups' | 'bots' | 'world' | 'rules'>('users')
 const errorText = ref('')
@@ -300,6 +300,22 @@ async function openConnect(bot: any) {
     connectError.value = error instanceof Error ? error.message : String(error)
   }
 }
+
+// 其他视图（状态页）可以要求跳到 Bot 页，并直接打开某个 Bot 的接入信息弹窗
+watch(
+  () => uiIntent.seq,
+  async () => {
+    const intent = uiIntent.intent
+    if (!intent || intent.view !== 'config') return
+    if (intent.configTab === 'bots') tab.value = 'bots'
+    if (!intent.openConnect || !intent.botId) return
+    const matches = (bot: any) => bot.id === intent.botId || bot.app_id === intent.botId
+    if (!state.bots.some(matches)) await refreshWorld()
+    const bot = state.bots.find(matches)
+    if (bot) await openConnect(bot)
+  },
+  { immediate: true },
+)
 
 async function toggleWhitelist(bot: any) {
   try {
