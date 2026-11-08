@@ -109,3 +109,9 @@ QQ_BOTS=[{"id":"10000","token":"MQS_...","secret":"mqs-secret-10000","intent":{.
 （否则报 `qq_bots.0.token Field required`）；1.7.3+ 改为只用 `secret` 换 token，
 多余 `token` 字段会被忽略。所以 QSandbox 生成的 `QQ_BOTS` 同时带 `token` 与 `secret`，
 两端都能解析。token 有效期 7200 秒，过期后重新打开“接入信息”弹窗获取。
+
+群消息事件（`GROUP_AT_MESSAGE_CREATE` / `GROUP_MESSAGE_CREATE`）的 `author` 带
+`bot` 与 `member_role`，`mentions` 按 `GroupMentionUser`（`scope="single"` +
+`bot` / `is_you` / `username`）下发。这是 `nonebot-adapter-qq` **1.7.2+ 的
+`GroupMemberAuthor` / `GroupMention` 必需字段**（1.7.2 之前没有这些字段，会忽略多余的键），
+与真实平台事件一致。缺字段时适配器会直接报 `author.bot Field required` 之类的校验错误。

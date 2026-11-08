@@ -366,6 +366,61 @@ async def test_group_message_without_mention_reaches_gateway(mqs) -> None:
         await ws.close()
 
 
+async def test_group_message_author_carries_member_identity(mqs) -> None:
+    """nonebot-adapter-qq 1.7.2+ models the group author as a GroupMemberAuthor.
+
+    Its ``bot`` and ``member_role`` fields are non-optional, matching the real
+    GROUP_MESSAGE_CREATE / GROUP_AT_MESSAGE_CREATE payloads; without them the
+    adapter cannot parse any group message from the sandbox.
+    """
+    ws, ready, token = await mqs.connect_gateway()
+    try:
+        await _send_user(mqs, "identity check")
+        frame = json.loads(await ws.recv())
+        author = frame["d"]["author"]
+        assert author["bot"] is False
+        assert author["member_role"] == "owner"
+        assert author["username"]
+        assert author["member_openid"] == author["id"]
+    finally:
+        await ws.close()
+
+
+async def test_group_mentions_carry_full_group_mention_shape(mqs) -> None:
+    """QQ's group mentions are either GroupMentionUser or GroupMentionEveryone.
+
+    The adapter validates every entry against that union, so a mention entry
+    with only openids makes the whole group message unparseable.
+    """
+    gid = await mqs.group_id()
+    async with httpx.AsyncClient(base_url=mqs.control_base, headers=mqs.headers) as client:
+        created = await client.post("/_mqs/users", json={"nickname": "Mentioned"})
+        assert created.status_code == 200, created.text
+        mentioned = created.json()
+        added = await client.post(f"/_mqs/groups/{gid}/members", json={"user_id": mentioned["id"]})
+        assert added.status_code == 200, added.text
+
+        response = await client.post(
+            "/_mqs/chat/send",
+            json={
+                "as_user": await mqs.user_id(),
+                "to": f"group:{gid}",
+                "content": "hi @Mentioned",
+                "mentions": [mentioned["id"]],
+                "at_bots": ["10000"],
+            },
+        )
+        assert response.status_code == 200, response.text
+
+    events = [e for e in await mqs.world.list_events() if e["type"] == "GROUP_AT_MESSAGE_CREATE"]
+    mention = events[-1]["payload"]["mentions"][0]
+    assert mention["scope"] == "single"
+    assert mention["bot"] is False
+    assert mention["is_you"] is False
+    assert mention["username"] == "Mentioned"
+    assert mention["member_openid"] == mention["id"]
+
+
 async def test_c2c_passive_window_60min_and_4_replies(mqs) -> None:
     ws, ready, token = await mqs.connect_gateway()
     headers = {"Authorization": f"QQBot {token}"}

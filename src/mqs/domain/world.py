@@ -1306,15 +1306,17 @@ class World(CommunityMixin):
                 target_bot_ids = [r["id"] for r in bot_rows]
             else:
                 target_bot_ids = []
-            mentioned_users: list[str] = []
+            mentioned_users: list[tuple[str, str]] = []
             for mid in mention_ids:
                 if any(r["id"] == mid for r in bot_rows):
                     continue
                 row = await self.db.fetchone(
-                    "SELECT user_id FROM group_members WHERE group_id=? AND user_id=?", (conv["peer_id"], mid)
+                    "SELECT u.nickname FROM group_members gm JOIN users u ON u.id=gm.user_id "
+                    "WHERE gm.group_id=? AND gm.user_id=?",
+                    (conv["peer_id"], mid),
                 )
                 if row:
-                    mentioned_users.append(mid)
+                    mentioned_users.append((mid, row["nickname"] or mid))
         else:
             if conv["peer_id"] != user_id:
                 raise NoPermission("this DM belongs to another user")
@@ -1385,15 +1387,24 @@ class World(CommunityMixin):
                     group_openid = await self._openid_tx(conn, bot, "group", conv["peer_id"])
                 user_openid = await self._openid_tx(conn, bot, "user", user_id)
                 union = union_openid_for(user_id)
+                author: dict[str, Any] = {
+                    "id": user_openid,
+                    "member_openid": user_openid if conv["type"] == "group" else None,
+                    "user_openid": user_openid if conv["type"] == "dm" else None,
+                    "union_openid": union,
+                    "username": user["nickname"] or user_id,
+                }
+                if conv["type"] == "group":
+                    # A group message author carries the sender's member
+                    # identity.  nonebot-adapter-qq 1.7.2+ requires both fields
+                    # on GroupMemberAuthor, and real GROUP_*_MESSAGE_CREATE
+                    # payloads include them.
+                    author["bot"] = False
+                    author["member_role"] = member["role"]
                 payload: dict[str, Any] = {
                     "id": msg_id,
                     "content": content,
-                    "author": {
-                        "id": user_openid,
-                        "member_openid": user_openid if conv["type"] == "group" else None,
-                        "user_openid": user_openid if conv["type"] == "dm" else None,
-                        "union_openid": union,
-                    },
+                    "author": author,
                     "timestamp": self.clock.iso(sent_at),
                     "msg_seq": seq,
                     "mentions": [],
@@ -1408,9 +1419,18 @@ class World(CommunityMixin):
                         payload["content"] = f"<@!{bot_openid}> {content}" if content else f"<@!{bot_openid}>"
                 else:
                     payload["author"]["user_openid"] = user_openid
-                for mid in mentioned_users:
+                for mid, nickname in mentioned_users:
                     mrow = await self._openid_tx(conn, bot, "user", mid)
-                    payload["mentions"].append({"id": mrow, "member_openid": mrow})
+                    payload["mentions"].append(
+                        {
+                            "scope": "single",
+                            "bot": False,
+                            "id": mrow,
+                            "is_you": False,
+                            "member_openid": mrow,
+                            "username": nickname,
+                        }
+                    )
                 if reply_ref:
                     payload["message_reference"] = {"message_id": reply_ref}
                 cur = await conn.execute(
