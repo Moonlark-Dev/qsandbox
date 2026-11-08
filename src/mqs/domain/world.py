@@ -1129,6 +1129,8 @@ class World(CommunityMixin):
             return None
         data = dict(row)
         data["raw"] = json.loads(data.pop("raw_json") or "{}")
+        if "at_bots" in data["raw"]:
+            data["at_bots"] = data["raw"]["at_bots"]
         return data
 
     async def ensure_conversation(self, conversation_id: str) -> None:
@@ -1238,7 +1240,7 @@ class World(CommunityMixin):
         data["raw"] = raw
         data["content"] = data.get("content") or ""
         for key in ("markdown", "keyboard", "ark", "embed", "media", "message_reference", "mentions",
-                    "attachments"):
+                    "at_bots", "attachments"):
             if key in raw:
                 data[key] = raw[key]
         if "media" in raw and "attachments" not in data:
@@ -1348,6 +1350,17 @@ class World(CommunityMixin):
                 "msg_seq": seq,
                 "attachments": attachment_list,
             }
+            # Which bots the sender explicitly @'d.  This is metadata for the
+            # sandbox's own chat view: a QQ client renders the mention in front
+            # of the text ("@Bot hello"), while the stored content stays what
+            # the user typed and the bot payload keeps the <@!openid> prefix.
+            display_at_bot_ids = (
+                [r["id"] for r in bot_rows if at_bots and r["id"] in at_bots]
+                if conv["type"] == "group"
+                else []
+            )
+            if display_at_bot_ids:
+                raw_message["at_bots"] = display_at_bot_ids
             await conn.execute(
                 "INSERT INTO messages(conversation_id,seq,msg_id,event_id,direction,sender_id,sender_type,bot_id,"
                 "msg_type,content,raw_json,sent_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",

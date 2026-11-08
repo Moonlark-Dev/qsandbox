@@ -37,6 +37,29 @@ async def test_user_message_reaches_bot_with_mention(mqs) -> None:
         await ws.close()
 
 
+async def test_explicit_at_bots_are_recorded_for_the_chat_view(mqs) -> None:
+    """The sandbox chat view renders "@Bot hello" from this metadata.
+
+    The stored content must stay what the user typed (the bot payload gets its
+    own <@!openid> prefix), so the control API records the @'d bot ids
+    separately and the GUI prepends their names.
+    """
+    conversation = f"group:{await mqs.group_id()}"
+    result = await _send_user(mqs, "hello", at_bots=["10000"])
+    assert result["message"]["content"] == "hello"
+    assert result["message"]["at_bots"] == ["10000"]
+
+    inbound = [m for m in await mqs.world.list_messages(conversation) if m["direction"] == "in"]
+    assert inbound[-1]["at_bots"] == ["10000"]
+
+    conversations = await mqs.world.list_conversations()
+    group = next(c for c in conversations if c["id"] == conversation)
+    assert group["last_message"]["at_bots"] == ["10000"]
+
+    plain = await _send_user(mqs, "plain group text", at_bots=[])
+    assert "at_bots" not in plain["message"]
+
+
 async def test_openids_are_scoped_per_bot(mqs) -> None:
     async with httpx.AsyncClient(base_url=mqs.control_base, headers=mqs.headers) as client:
         create = await client.post("/_mqs/bots", json={"app_id": "10001", "name": "Second Bot"})

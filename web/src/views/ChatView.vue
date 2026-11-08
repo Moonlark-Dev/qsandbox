@@ -452,8 +452,27 @@ function display(content: string): string {
   return (content || '').replace(/<@![^>]+>/g, '@').trim()
 }
 
+// A QQ client shows the bots a message @'d in front of its text, while the
+// stored content is just what the sender typed.  The control API therefore
+// records the explicit @'d bot ids on the message; render them by name here.
+function mentionPrefix(message: any): string {
+  if (message?.sender_type !== 'user') return ''
+  const ids: string[] = message.at_bots || message.raw?.at_bots || []
+  if (!ids.length) return ''
+  return ids
+    .map((id) => state.bots.find((bot: any) => bot.id === id)?.name || id)
+    .map((name) => `@${name}`)
+    .join(' ')
+}
+
 function renderText(message: any, forPreview = false): string {
   if (!message) return ''
+  const prefix = mentionPrefix(message)
+  const body = renderBody(message, forPreview)
+  return prefix ? (body ? `${prefix} ${body}` : prefix) : body
+}
+
+function renderBody(message: any, forPreview = false): string {
   if (message.content && message.content.trim()) return display(message.content)
   const raw = message.raw || message
   if (raw.markdown?.content) return raw.markdown.content
