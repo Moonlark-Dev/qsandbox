@@ -10,6 +10,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import __version__
+
 DEFAULT_HOME = Path(os.environ.get("MQS_HOME", "~/.mqs")).expanduser()
 DEFAULT_PROFILE = "default"
 DEFAULT_SIM_PORT = 5700
@@ -173,6 +175,7 @@ class ProcessConfig:
     def handshake(self) -> dict:
         return {
             "mqs": 1,
+            "version": __version__,
             "profile": self.profile,
             "host": self.host,
             "sim_port": self.sim_port,

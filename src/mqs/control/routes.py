@@ -16,6 +16,7 @@ from fastapi import Depends, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRouter
 
+from .. import __version__
 from ..api.common import constant_time_equals
 from ..clock import parse_duration
 from ..config import ProcessConfig
@@ -103,7 +104,7 @@ public_router = APIRouter(prefix="/_mqs")
 
 @public_router.get("/health")
 async def health(request: Request) -> dict:
-    return {"ok": True, "profile": request.app.state.config.profile, "mqs": "0.1.0"}
+    return {"ok": True, "profile": request.app.state.config.profile, "mqs": __version__}
 
 
 @public_router.post("/session")

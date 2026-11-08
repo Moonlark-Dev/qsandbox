@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from .. import __version__
 from ..api.common import TraceMiddleware, install_error_handlers
 from ..config import ProcessConfig
 from ..domain.world import World
@@ -28,6 +29,9 @@ def find_web_dist() -> Path | None:
     candidates = []
     if os.environ.get("MQS_WEB_DIST"):
         candidates.append(Path(os.environ["MQS_WEB_DIST"]))
+    # Installed wheel/sdist: the built GUI ships inside the package directory.
+    candidates.append(Path(__file__).resolve().parents[1] / "web" / "dist")
+    # Source checkout: web/dist next to pyproject.toml.
     candidates.append(REPO_ROOT / "web" / "dist")
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
@@ -48,9 +52,9 @@ FALLBACK_HTML = """<!doctype html>
 code{background:#0b0d12;padding:2px 6px;border-radius:6px;color:#9ecbff} a{color:#7cc4ff}</style></head>
 <body><div class="card"><h1>QSandbox 控制台</h1>
 <p>前端尚未构建。开发模式：</p>
-<pre><code>cd web &amp;&amp; pnpm install &amp;&amp; pnpm dev</code></pre>
+<pre><code>cd web &amp;&amp; npm install &amp;&amp; npm run dev</code></pre>
 <p>生产构建：</p>
-<pre><code>cd web &amp;&amp; pnpm install &amp;&amp; pnpm build</code></pre>
+<pre><code>cd web &amp;&amp; npm install &amp;&amp; npm run build</code></pre>
 <p>也可以直接用 CLI：<code>mqs status --json</code></p>
 <p><a href="/docs">控制 API 文档</a> · <a href="/_mqs/health">健康检查</a></p>
 <p style="color:#8a8f99;font-size:13px">QSandbox 是非官方沙箱，与腾讯无关联。</p></div></body></html>
@@ -86,7 +90,7 @@ def _bind_host(config: ProcessConfig) -> str:
 def create_control_app(world: World, config: ProcessConfig) -> FastAPI:
     app = FastAPI(
         title="QSandbox Control API",
-        version="0.1.0",
+        version=__version__,
         docs_url="/docs",
         redoc_url=None,
         openapi_url="/openapi.json",

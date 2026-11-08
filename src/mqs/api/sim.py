@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, FastAPI, Request, Response, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
+from .. import __version__
 from ..config import ProcessConfig
 from ..domain.world import World
 from ..errors import InvalidParam
@@ -854,7 +855,7 @@ def create_sim_app(world: World, config: ProcessConfig) -> FastAPI:
     app = FastAPI(
         title="QSandbox Simulate API",
         description="QQ Bot API v2 sandbox — not affiliated with Tencent",
-        version="0.1.0",
+        version=__version__,
         docs_url="/docs" if config.expose_docs else None,
         redoc_url="/redoc" if config.expose_docs else None,
         openapi_url="/openapi.json" if config.expose_docs else None,

@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/Moonlark-Dev/qsandbox/actions/workflows/ci.yml/badge.svg)](https://github.com/Moonlark-Dev/qsandbox/actions/workflows/ci.yml)
 [![Release](https://github.com/Moonlark-Dev/qsandbox/actions/workflows/release.yml/badge.svg)](https://github.com/Moonlark-Dev/qsandbox/actions/workflows/release.yml)
+[![PyPI](https://img.shields.io/pypi/v/moonlark-qsandbox.svg)](https://pypi.org/project/moonlark-qsandbox/)
 
 Moonlark QSandbox 一个是 QQ Bot API 沙箱，您可以在此随意创建虚拟用户，并对您的 Bot 进行测试。
 
@@ -17,20 +18,28 @@ Electron 桌面端（desktop/） → 拉起 sidecar → 内嵌同一份 Vue GUI
 CLI / MCP                  → 共用同一个控制 API，无第二套实现
 ```
 
-![状态页](docs/screenshots/status.png)
+![状态页](https://raw.githubusercontent.com/Moonlark-Dev/qsandbox/main/docs/screenshots/status.png)
 
 ## 快速开始
 
 ```bash
-# 1. 安装（Python 3.11+）
-python3 -m venv .venv && . .venv/bin/activate
-pip install -e ".[dev]"
+# 1. 安装（Python 3.11+；CLI 工具建议 pipx）
+pipx install moonlark-qsandbox   # 或：pip install moonlark-qsandbox
 
 # 2. 启动（首次自动建 1 个可操作账号 + 3 个 npc + 1 群 + 1 频道）
 mqs serve
 #    Simulate API : http://127.0.0.1:5700
 #    Gateway      : ws://127.0.0.1:5700/websocket
 #    Control GUI  : http://127.0.0.1:5701/#t=...   ← 浏览器打开即可预览
+```
+
+从源码开发：
+
+```bash
+git clone https://github.com/Moonlark-Dev/qsandbox && cd qsandbox
+python3 -m venv .venv && . .venv/bin/activate
+pip install -e ".[dev]"
+(cd web && npm install && npm run build)   # 可选：源码运行时需要，用于控制台 GUI
 ```
 
 **默认测试 Bot**
@@ -51,7 +60,7 @@ botpy 的 `Route.DOMAIN` / token URL 是硬编码的，使用仓库自带的垫�
 import mqs.compat.botpy  # noqa: F401  ← 必须在 import botpy 之前
 ```
 
-完整 echo bot 示例见 [examples/botpy_echo/bot.py](./examples/botpy_echo/bot.py)，已知差异见 [docs/COMPAT.md](./docs/COMPAT.md)。
+完整 echo bot 示例见 [examples/botpy_echo/bot.py](https://github.com/Moonlark-Dev/qsandbox/blob/main/examples/botpy_echo/bot.py)，已知差异见 [docs/COMPAT.md](https://github.com/Moonlark-Dev/qsandbox/blob/main/docs/COMPAT.md)。
 
 ### 命令行使用
 
@@ -77,7 +86,7 @@ cd desktop && npm install && npm run dist:linux   # release/QSandbox-*.AppImage
 安装包自带编译好的 sidecar（`resources/sidecar/mqs`，Nuitka standalone），用户机器**不需要**装 Python。
 CI 会在三平台各跑一次 `tools/smoke_sidecar.py`，并解包检查 `tools/verify_desktop_bundle.py`，确认 mqs 真的进了安装包。
 
-桌面端数据放在 `app.getPath('userData')/mqs-home`，不污染仓库内的 profile。更多见 [desktop/README.md](./desktop/README.md)。
+桌面端数据放在 `app.getPath('userData')/mqs-home`，不污染仓库内的 profile。更多见 [desktop/README.md](https://github.com/Moonlark-Dev/qsandbox/blob/main/desktop/README.md)。
 
 ## 频率与时效（严格对齐 QQ 官方文档）
 
@@ -114,7 +123,7 @@ CI 会在三平台各跑一次 `tools/smoke_sidecar.py`，并解包检查 `tools
 | **GUI** | Electron 桌面 + 浏览器预览：状态/配置/聊天/频道/调试器/设置，规则引擎、群管理、频道角色与私信、私聊 Bot、账号切换 |
 | **覆盖率** | 53 条端点：53 已实现（50 full + 3 partial），0 stub |
 
-实时覆盖率查询：`GET /_mqs/contract`，或查看 [docs/COVERAGE.md](./docs/COVERAGE.md)（由 `mqs contract export` 生成）。
+实时覆盖率查询：`GET /_mqs/contract`，或查看 [docs/COVERAGE.md](https://github.com/Moonlark-Dev/qsandbox/blob/main/docs/COVERAGE.md)（由 `mqs contract export` 生成）。
 
 ## 目录结构
 

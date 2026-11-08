@@ -1,0 +1,89 @@
+name: Publish to PyPI
+
+# The `pip install moonlark-qsandbox` channel. Desktop installers are built by
+# release.yml; this workflow intentionally does not wait for the three-platform
+# Nuitka build, so a tag publishes the Python package within minutes.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "只构建和校验，不发布到 PyPI"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pypi-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # The wheel ships the GUI itself, so the frontend must be built first.
+      - name: Build the web GUI
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      - name: Check that the tag matches the package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match pyproject version ${version}" >&2
+            exit 1
+          fi
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          twine check dist/*
+      - name: Verify the artifacts (GUI, LICENSE, version)
+        run: python tools/check_dist.py
+      - name: Smoke-test the wheel in a clean venv
+        run: python tools/smoke_wheel.py --wheel dist/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pypi-dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    # Manual runs default to a dry run; pushing a v* tag publishes.
+    if: github.event_name == 'push' || inputs.dry_run == false
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/moonlark-qsandbox/
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pypi-dist
+          path: dist
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Add the repository secret PYPI_API_TOKEN. To move to Trusted
+          # Publishing instead: drop `password`, add `id-token: write` under
+          # this job's `permissions`, and register the publisher on PyPI.
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          packages-dir: dist
+          # Re-running a tag (or retrying after a partial upload) must not fail
+          # just because a file is already there. A version's files can never
+          # be replaced anyway, so skipping is the honest behaviour.
+          skip-existing: true

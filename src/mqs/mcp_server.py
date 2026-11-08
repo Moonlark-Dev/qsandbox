@@ -14,11 +14,12 @@ from typing import Any
 import httpx
 from mcp.server.mcpserver import MCPServer
 
+from . import __version__
 from .config import DEFAULT_PROFILE, read_runtime, resolve_home
 
 server = MCPServer(
     name="mqs",
-    version="0.1.0",
+    version=__version__,
     instructions=(
         "MQS is a local QQ Bot API v2 sandbox. Use send_as_user to drive conversations, "
         "expect_event to assert what the bot received, and inspect_gateway to debug frames."

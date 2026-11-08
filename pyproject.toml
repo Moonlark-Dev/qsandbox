@@ -8,9 +8,22 @@ version = "0.1.0"
 description = "MQS — a faithful, agent-first sandbox for the QQ Bot API v2"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "AGPL-3.0-or-later" }
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
 authors = [{ name = "Moonlark Dev Team" }]
 keywords = ["qqbot", "sandbox", "moonlark", "fastapi", "mcp"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+]
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
@@ -43,9 +56,22 @@ mqs = "mqs.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Moonlark-Dev/qsandbox"
+Repository = "https://github.com/Moonlark-Dev/qsandbox"
+Issues = "https://github.com/Moonlark-Dev/qsandbox/issues"
+Releases = "https://github.com/Moonlark-Dev/qsandbox/releases"
+
+[tool.hatch.build]
+# `web/dist` is gitignored because it is generated, but it is part of the
+# product: a `pip install` must serve the same GUI the desktop sidecar serves.
+# Release CI builds the frontend before `python -m build`, and
+# tools/smoke_wheel.py fails the build if it did not make it into the wheel.
+artifacts = ["web/dist/**"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mqs"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"web/dist" = "mqs/web/dist"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
