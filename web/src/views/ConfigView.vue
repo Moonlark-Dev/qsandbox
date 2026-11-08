@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { api } from '../api'
+import { askText } from '../dialog'
 import { patchSettings, refreshAll, refreshWorld, state, toast } from '../store'
 
 const tab = ref<'users' | 'groups' | 'bots' | 'world' | 'rules'>('users')
@@ -268,7 +269,15 @@ async function deleteBot(id: string) {
 }
 
 async function editScopes(bot: any) {
-  const next = prompt('能力集（逗号分隔）', (bot.scopes || []).join(', '))
+  const next = await askText({
+    title: `能力集 · ${bot.name}`,
+    label: 'scopes（逗号分隔）',
+    value: (bot.scopes || []).join(', '),
+    placeholder: 'group_message, c2c_message, media, member',
+    hint: 'group_message 群消息 · c2c_message 私聊 · media 富媒体 · member 成员管理。留空表示不具备任何能力。',
+    confirmText: '保存',
+    allowEmpty: true,
+  })
   if (next === null) return
   try {
     await api.patch(`/_mqs/bots/${bot.id}`, { scopes: next.split(',').map((s) => s.trim()).filter(Boolean) })

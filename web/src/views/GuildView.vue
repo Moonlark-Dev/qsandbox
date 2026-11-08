@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../api'
+import { askText } from '../dialog'
 import { refreshWorld, state, toast } from '../store'
 
 const guilds = ref<any[]>([])
@@ -64,7 +65,7 @@ async function selectGuild(id: string) {
 
 async function createChannel() {
   if (!guildId.value) return
-  const name = prompt('新子频道名称', '新频道')
+  const name = await askText({ title: '新建子频道', label: '频道名称', value: '新频道', confirmText: '创建' })
   if (!name) return
   try {
     await api.post(`/_mqs/guilds/${guildId.value}/channels`, { name, type: 0, position: channels.value.length + 1 })
@@ -76,7 +77,7 @@ async function createChannel() {
 }
 
 async function renameChannel(channel: any) {
-  const name = prompt('子频道名称', channel.name)
+  const name = await askText({ title: '重命名字频道', label: '频道名称', value: channel.name, confirmText: '保存' })
   if (!name) return
   try {
     await api.patch(`/_mqs/channels/${channel.id}`, { name })
@@ -98,7 +99,7 @@ async function deleteChannel(channel: any) {
 
 async function createRole() {
   if (!guildId.value) return
-  const name = prompt('身份组名称', '新身份组')
+  const name = await askText({ title: '新建身份组', label: '身份组名称', value: '新身份组', confirmText: '创建' })
   if (!name) return
   try {
     await api.post(`/_mqs/guilds/${guildId.value}/roles`, { name, color: 0, hoist: 0 })
@@ -110,7 +111,7 @@ async function createRole() {
 }
 
 async function renameRole(role: any) {
-  const name = prompt('身份组名称', role.name)
+  const name = await askText({ title: '重命名身份组', label: '身份组名称', value: role.name, confirmText: '保存' })
   if (!name) return
   try {
     await api.patch(`/_mqs/guilds/${guildId.value}/roles/${role.id}`, { name })

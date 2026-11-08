@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { setToken } from './api'
 import { bootstrap, refreshStatus, refreshWorld, state } from './store'
+import TextPrompt from './components/TextPrompt.vue'
 import StatusView from './views/StatusView.vue'
 import ConfigView from './views/ConfigView.vue'
 import ChatView from './views/ChatView.vue'
@@ -138,6 +139,9 @@ function refresh() {
   </div>
 
   <SettingsPanel v-if="settingsOpen" @close="settingsOpen = false" />
+
+  <!-- 应用内文本输入弹窗：Electron 不支持 window.prompt()，各视图统一用它 -->
+  <TextPrompt />
 
   <div v-if="state.toast" class="toast">{{ state.toast }}</div>
 </template>
