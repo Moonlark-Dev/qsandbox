@@ -95,10 +95,20 @@ jobs:
         run: |
           python examples/botpy_echo/bot.py > /tmp/botpy.log 2>&1 &
           for i in $(seq 1 40); do grep -q "ready as" /tmp/botpy.log && break; sleep 0.5; done
+          # Show what the real botpy SDK did, so a failure leaves a trail in the log.
+          cat /tmp/botpy.log
           grep -q "ready as" /tmp/botpy.log
           MQS_HOME=/tmp/mqs-home ./target/debug/mqs --profile ci script run smoke --junit /tmp/junit.xml
           test -s /tmp/junit.xml
+          grep -o '<testsuite[^>]*' /tmp/junit.xml || true
           MQS_HOME=/tmp/mqs-home ./target/debug/mqs --profile ci status --json
+      - name: Tear down the sandbox
+        if: always()
+        run: |
+          pkill -f 'examples/botpy_echo/bot.py' || true
+          pkill -f 'mqs serve' || true
+          echo "--- sandbox log ---"; tail -40 /tmp/mqs.log || true
+          echo "--- botpy log ---"; tail -40 /tmp/botpy.log || true
 
   # ------------------------------------------------------------------ desktop installers
   desktop:
@@ -186,6 +196,12 @@ jobs:
           ./target/release/mqs --profile smoke status --json | grep -q '"coverage"'
           gui_port=$(sed -n 's/.*"control_port": *\([0-9]*\).*/\1/p' /tmp/smoke.log | head -1)
           curl -sSf "http://127.0.0.1:${gui_port}/" | grep -q 'id="app"'
+          echo "embedded GUI served on control port ${gui_port}"
+      - name: Tear down the smoke sandbox
+        if: always()
+        run: |
+          pkill -f 'mqs --profile smoke serve' || true
+          echo "--- smoke log ---"; tail -20 /tmp/smoke.log || true
       - name: Package the CLI
         run: |
           mkdir -p dist
