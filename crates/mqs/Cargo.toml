@@ -1,0 +1,55 @@
+[package]
+name = "mqs"
+description = "QSandbox — a faithful sandbox for the QQ Bot API v2"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "mqs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mqs"
+path = "src/bin/mqs.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+axum = { version = "0.8", features = ["ws", "multipart", "macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+clap = { version = "4", features = ["derive", "env"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart", "charset", "http2"] }
+serde_yaml = "0.9"
+sha2 = "0.10"
+md-5 = "0.10"
+base64 = "0.22"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+crc32fast = "1"
+libc = "0.2"
+futures-util = "0.3"
+bytes = "1"
+anyhow = "1"
+thiserror = "2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+percent-encoding = "2"
+async-trait = "0.1"
+rand_core = "0.6"
+tempfile = "3"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[build-dependencies]
+# no external build deps: the asset table is generated with plain std
+
+
+[dev-dependencies]
+tokio-tungstenite = "0.30"
+base64 = "0.22"
+md-5 = "0.10"

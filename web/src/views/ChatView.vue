@@ -55,7 +55,6 @@ const isMember = computed(() => {
   if (dmTarget.value) return true
   const conv = activeConversation.value
   if (!conv) return false
-  if (conv.type === 'dms') return true
   if (conv.type !== 'group') return false
   return (conv.member_ids || []).includes(currentUserId.value)
 })
@@ -161,22 +160,14 @@ async function send() {
   if ((!content && !pendingAttachments.value.length) || !canSend.value) return
   const conversation = activeConversationId.value
   try {
-    if (activeConversation.value?.type === 'dms') {
-      await api.post(`/_mqs/dms/${activeConversation.value.dms_guild_id}/messages`, {
-        as_user: currentUserId.value,
-        content,
-        attachments: pendingAttachments.value,
-      })
-    } else {
-      await api.post('/_mqs/chat/send', {
-        as_user: currentUserId.value,
-        conversation_id: conversation,
-        content,
-        at_bots: selectedBots.value.length ? selectedBots.value : [],
-        reply_to: replyTo.value?.msg_id || null,
-        attachments: pendingAttachments.value,
-      })
-    }
+    await api.post('/_mqs/chat/send', {
+      as_user: currentUserId.value,
+      conversation_id: conversation,
+      content,
+      at_bots: selectedBots.value.length ? selectedBots.value : [],
+      reply_to: replyTo.value?.msg_id || null,
+      attachments: pendingAttachments.value,
+    })
     text.value = ''
     replyTo.value = null
     pendingAttachments.value = []

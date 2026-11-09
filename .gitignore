@@ -1,27 +1,34 @@
-# MQS
-.venv/
+# Rust
+/target/
+**/*.rs.bk
+
+# Node / frontend
+web/node_modules/
+web/dist/
+desktop/node_modules/
+
+# Python shim
 __pycache__/
 *.py[cod]
 *.egg-info/
-dist/
-build/
-.pytest_cache/
-.ruff_cache/
+python/build/
+python/dist/
+
+# Sandbox runtime data
 profiles/
 .mqs/
+runtime.json
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
-web/dist/
-web/node_modules/
-desktop/node_modules/
-desktop/dist/
-desktop/release/
-build-sidecar/
-mqs-sidecar-*.tar.gz
+
+# Build artifacts
+dist/
 build/
 *.spec
+*.log
 .env
 .DS_Store
 
-*.log
+# Harness memory/state
+.dsh/

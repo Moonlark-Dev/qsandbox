@@ -1,14 +1,14 @@
 # QSandbox 接口覆盖率
 
-> 自动生成 · 文档快照 2026-11-07 · 请勿手改
+> 自动生成 · 文档快照 2026-11-09 · 请勿手改
 
-**53 endpoints — 53 implemented, 0 stubs, 0 n/a**
+**29 endpoints — 29 implemented, 0 stubs, 0 n/a**
 
 | 层级 | 总数 | full | partial | stub | n/a |
 |---|---|---|---|---|---|
 | L0 | 6 | 6 | 0 | 0 | 0 |
 | L1 | 11 | 9 | 2 | 0 | 0 |
-| L2 | 33 | 33 | 0 | 0 | 0 |
+| L2 | 9 | 9 | 0 | 0 | 0 |
 | L3 | 3 | 2 | 1 | 0 | 0 |
 
 ## 明细
@@ -32,30 +32,6 @@
 | `DELETE` | `/v2/users/{openid}/messages/{message_id}` | partial | Bot Token | L1 | 撤回单聊消息 |
 | `POST` | `/v2/users/{openid}/upload_part_finish` | full | Bot Token | L1 | 单聊富媒体分片上传：完成分片 |
 | `POST` | `/v2/users/{openid}/upload_prepare` | full | Bot Token | L1 | 单聊富媒体分片上传：预上传 |
-| `DELETE` | `/channels/{channel_id}` | full | Bot Token | L2 | 删除子频道 |
-| `GET` | `/channels/{channel_id}` | full | Bot Token | L2 | 获取子频道信息 |
-| `PATCH` | `/channels/{channel_id}` | full | Bot Token | L2 | 修改子频道 |
-| `GET` | `/channels/{channel_id}/messages` | full | Bot Token | L2 | 获取频道消息列表 |
-| `POST` | `/channels/{channel_id}/messages` | full | Bot Token | L2 | 发送频道消息 |
-| `GET` | `/channels/{channel_id}/messages/{message_id}` | full | Bot Token | L2 | 获取频道消息 |
-| `POST` | `/dms/{guild_id}/messages` | full | Bot Token | L2 | 发送频道私信（被动 / 主动） |
-| `DELETE` | `/dms/{guild_id}/messages/{message_id}` | full | Bot Token | L2 | 撤回频道私信 |
-| `GET` | `/guilds/{guild_id}` | full | Bot Token | L2 | 获取频道信息 |
-| `GET` | `/guilds/{guild_id}/channels` | full | Bot Token | L2 | 获取子频道列表 |
-| `POST` | `/guilds/{guild_id}/channels` | full | Bot Token | L2 | 创建子频道 |
-| `GET` | `/guilds/{guild_id}/members` | full | Bot Token | L2 | 获取频道成员列表 |
-| `DELETE` | `/guilds/{guild_id}/members/{user_id}` | full | Bot Token | L2 | 删除频道成员（可同时拉黑/撤回历史消息） |
-| `GET` | `/guilds/{guild_id}/members/{user_id}` | full | Bot Token | L2 | 获取单个频道成员 |
-| `PATCH` | `/guilds/{guild_id}/members/{user_id}/mute` | full | Bot Token | L2 | 频道指定成员禁言 |
-| `DELETE` | `/guilds/{guild_id}/members/{user_id}/roles/{role_id}` | full | Bot Token | L2 | 把成员移出身份组 |
-| `PUT` | `/guilds/{guild_id}/members/{user_id}/roles/{role_id}` | full | Bot Token | L2 | 把成员加入身份组 |
-| `PATCH` | `/guilds/{guild_id}/mute` | full | Bot Token | L2 | 频道全员禁言 |
-| `GET` | `/guilds/{guild_id}/roles` | full | Bot Token | L2 | 获取频道身份组列表 |
-| `POST` | `/guilds/{guild_id}/roles` | full | Bot Token | L2 | 创建频道身份组 |
-| `DELETE` | `/guilds/{guild_id}/roles/{role_id}` | full | Bot Token | L2 | 删除频道身份组 |
-| `PATCH` | `/guilds/{guild_id}/roles/{role_id}` | full | Bot Token | L2 | 修改频道身份组 |
-| `POST` | `/users/@me/dms` | full | Bot Token | L2 | 创建私信会话（频道私信） |
-| `GET` | `/users/@me/guilds` | full | Bot Token | L2 | 获取机器人所在频道列表 |
 | `POST` | `/v2/groups/{group_openid}/approval_join_request/{member_openid}` | full | Bot Token | L2 | 审批入群申请（approve/decline） |
 | `POST` | `/v2/groups/{group_openid}/batch_remove_members` | full | Bot Token | L2 | 群成员批量移除（可同时拉黑） |
 | `GET` | `/v2/groups/{group_openid}/bot_state` | full | Bot Token | L2 | 获取机器人群内状态（含主动消息开关） |

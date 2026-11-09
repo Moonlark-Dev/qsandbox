@@ -1,65 +1,14 @@
 {
-  "name": "qsandbox-desktop",
-  "version": "0.1.0",
+  "name": "mqs-desktop",
   "private": true,
-  "description": "QSandbox desktop shell (Electron) — starts the local sandbox server and renders the Vue GUI",
-  "homepage": "https://github.com/Moonlark-Dev/qsandbox",
-  "main": "dist/main.js",
-  "type": "commonjs",
+  "version": "0.3.0",
+  "description": "QSandbox desktop shell (Tauri) — the sandbox server is embedded in the same binary",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "start": "npm run build && electron .",
-    "dev": "npm run build && electron .",
-    "check-sidecar": "node -e \"const fs=require('fs'),path=require('path');const dist=path.join(__dirname,'..','build-sidecar','mqs.dist');if(!fs.existsSync(dist)){console.error('缺少编译好的 sidecar: '+dist);console.error('先在仓库根目录运行: python tools/build_sidecar.py');process.exit(1)}\"",
-    "dist:linux": "npm run build && npm run check-sidecar && electron-builder --linux AppImage deb",
-    "dist:win": "npm run build && npm run check-sidecar && electron-builder --win nsis",
-    "dist:mac": "npm run build && npm run check-sidecar && electron-builder --mac dmg"
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
-    "electron": "^33.2.1",
-    "electron-builder": "^25.1.8",
-    "typescript": "^5.7.2"
-  },
-  "build": {
-    "appId": "dev.moonlark.qsandbox",
-    "productName": "QSandbox",
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "dist/**/*",
-      "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "../build-sidecar/mqs.dist",
-        "to": "sidecar"
-      }
-    ],
-    "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ],
-      "category": "Development",
-      "artifactName": "QSandbox-${version}-${arch}.${ext}",
-      "maintainer": "Moonlark Dev Team"
-    },
-    "win": {
-      "target": [
-        "nsis"
-      ],
-      "artifactName": "QSandbox-${version}-${arch}.${ext}"
-    },
-    "mac": {
-      "target": [
-        "dmg"
-      ],
-      "category": "public.app-category.developer-tools",
-      "artifactName": "QSandbox-${version}-${arch}.${ext}"
-    }
-  },
-  "author": "Moonlark Dev Team",
-  "license": "AGPL-3.0-or-later"
+    "@tauri-apps/cli": "^2"
+  }
 }

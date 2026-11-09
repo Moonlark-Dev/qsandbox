@@ -1,0 +1,29 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "QSandbox",
+  "version": "0.3.0",
+  "identifier": "dev.moonlark.qsandbox",
+  "build": {
+    "frontendDist": "ui"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "shortDescription": "QQ Bot API v2 sandbox",
+    "longDescription": "QSandbox — a faithful, local sandbox for the QQ Bot API v2. Not affiliated with Tencent.",
+    "category": "DeveloperTool"
+  }
+}

@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mqs-compat"
+version = "0.3.0"
+description = "Point the real QQ SDKs (botpy) at a running QSandbox — Python-only compatibility shim"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "AGPL-3.0-or-later"
+authors = [{ name = "Moonlark Dev Team" }]
+keywords = ["qqbot", "sandbox", "botpy", "moonlark"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Testing",
+]
+# The shim has no hard dependency: it only imports botpy when patching it.
+dependencies = []
+
+[project.optional-dependencies]
+botpy = ["qq-botpy"]
+
+[project.urls]
+Homepage = "https://github.com/Moonlark-Dev/qsandbox"
+Repository = "https://github.com/Moonlark-Dev/qsandbox"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mqs"]

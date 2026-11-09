@@ -5,6 +5,7 @@ on:
     branches: [main, master]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -13,34 +14,36 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
 jobs:
-  python:
+  # ------------------------------------------------------------------ Rust
+  rust:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-      - name: Lint
-        run: ruff check src tests
-      - name: Test
-        run: pytest -q
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: rust-tests
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --all-targets -p mqs -- -D warnings
+      - name: Test (unit + integration)
+        run: cargo test -p mqs
       - name: Contract artifacts are current
         run: |
-          mqs contract export --out docs/COVERAGE.md --types web/src/types/api.ts
+          cargo run -q -p mqs -- contract export
           git diff --exit-code docs/COVERAGE.md web/src/types/api.ts
       - name: CLI doctor
-        run: |
-          MQS_HOME=/tmp/mqs-doctor mqs doctor --profile ci || true
-          MQS_HOME=/tmp/mqs-doctor mqs status --profile ci || true
+        run: cargo run -q -p mqs -- --home /tmp/mqs-doctor --profile ci doctor || true
 
+  # ------------------------------------------------------------------ GUI
   web:
     runs-on: ubuntu-latest
     defaults:
@@ -56,54 +59,34 @@ jobs:
       - run: npm ci
       - run: npx vue-tsc --noEmit
       - run: npm run build
-
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - name: Build web
-        working-directory: web
-        run: |
-          npm ci
-          npm run build
-      - name: Build sidecar (Nuitka standalone)
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[build]"
-          python tools/build_sidecar.py
-      - name: Smoke test sidecar
-        run: python tools/smoke_sidecar.py
-      - name: Package sidecar artifact
-        run: tar -C build-sidecar -czf "$PWD/mqs-sidecar-linux-x64.tar.gz" mqs.dist
       - uses: actions/upload-artifact@v4
         with:
-          name: qsandbox-sidecar-linux
-          path: mqs-sidecar-linux-x64.tar.gz
+          name: web-dist
+          path: web/dist
           if-no-files-found: error
 
+  # ------------------------------------------------------------------ real SDK
   botpy-compat:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: rust-botpy
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Install
+      - name: Build mqs
+        run: cargo build -p mqs
+      - name: Install botpy + the Python shim
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]" qq-botpy
+          pip install qq-botpy ./python
       - name: Start sandbox
         run: |
           mkdir -p /tmp/mqs-home
-          MQS_HOME=/tmp/mqs-home mqs serve --profile ci --port 5700 --control-port 5701 --token ci-token > /tmp/mqs.log 2>&1 &
+          MQS_HOME=/tmp/mqs-home ./target/debug/mqs serve --profile ci --port 5700 --control-port 5701 --token ci-token > /tmp/mqs.log 2>&1 &
           for i in $(seq 1 40); do grep -q '"gui_url"' /tmp/mqs.log && break; sleep 0.5; done
           grep -q '"gui_url"' /tmp/mqs.log
       - name: Run botpy echo bot
@@ -113,5 +96,103 @@ jobs:
           python examples/botpy_echo/bot.py > /tmp/botpy.log 2>&1 &
           for i in $(seq 1 40); do grep -q "ready as" /tmp/botpy.log && break; sleep 0.5; done
           grep -q "ready as" /tmp/botpy.log
-          MQS_HOME=/tmp/mqs-home MQS_PROFILE=ci mqs script run smoke --junit /tmp/junit.xml
+          MQS_HOME=/tmp/mqs-home ./target/debug/mqs --profile ci script run smoke --junit /tmp/junit.xml
           test -s /tmp/junit.xml
+          MQS_HOME=/tmp/mqs-home ./target/debug/mqs --profile ci status --json
+
+  # ------------------------------------------------------------------ desktop installers
+  desktop:
+    needs: [web, rust]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux
+          - os: windows-latest
+            target: win
+          - os: macos-latest
+            target: mac
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: tauri-${{ matrix.target }}
+      - name: Linux webkit dependencies
+        if: matrix.target == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - name: Restore the built GUI (embedded into the binary at build time)
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+      - name: Install the Tauri CLI
+        run: npm install -g @tauri-apps/cli@^2
+      - name: Build the desktop bundle
+        working-directory: desktop/src-tauri
+        env:
+          # No signing identities on CI runners.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: tauri build
+      - name: Verify bundles were produced
+        shell: bash
+        run: |
+          set -e
+          found=$(find target/release/bundle -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.msi' -o -name '*.exe' -o -name '*.dmg' \) | wc -l)
+          echo "bundles: $found"
+          find target/release/bundle -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.msi' -o -name '*.exe' -o -name '*.dmg' \)
+          test "$found" -ge 1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsandbox-${{ matrix.target }}
+          path: |
+            target/release/bundle/**/*.AppImage
+            target/release/bundle/**/*.deb
+            target/release/bundle/**/*.rpm
+            target/release/bundle/**/*.msi
+            target/release/bundle/**/*.exe
+            target/release/bundle/**/*.dmg
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------ CLI binary
+  cli:
+    runs-on: ubuntu-latest
+    needs: [web]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: rust-cli
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+      - name: Build mqs (embedded GUI)
+        run: cargo build --release -p mqs
+      - name: Smoke test the binary
+        run: |
+          MQS_HOME=/tmp/mqs-smoke ./target/release/mqs --profile smoke serve --port 0 --control-port 0 > /tmp/smoke.log 2>&1 &
+          for i in $(seq 1 40); do grep -q '"gui_url"' /tmp/smoke.log && break; sleep 0.5; done
+          grep -q '"gui_url"' /tmp/smoke.log
+          export MQS_HOME=/tmp/mqs-smoke
+          ./target/release/mqs --profile smoke status --json | grep -q '"coverage"'
+          gui_port=$(sed -n 's/.*"control_port": *\([0-9]*\).*/\1/p' /tmp/smoke.log | head -1)
+          curl -sSf "http://127.0.0.1:${gui_port}/" | grep -q 'id="app"'
+      - name: Package the CLI
+        run: |
+          mkdir -p dist
+          cp target/release/mqs dist/
+          tar -C dist -czf "mqs-linux-x64.tar.gz" mqs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsandbox-cli
+          path: mqs-linux-x64.tar.gz
+          if-no-files-found: error

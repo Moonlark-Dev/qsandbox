@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { api, formatBytes, formatDuration } from '../api'
 import { gotoBotConfig, refreshStatus, refreshWorld, state, toast } from '../store'
 
@@ -27,8 +27,18 @@ const coveragePercent = computed(() => {
 })
 
 onMounted(async () => {
-  await Promise.all([loadProfiles(), refreshStatus(), refreshWorld()])
+  await Promise.all([refreshStatus(), refreshWorld()])
 })
+
+// The profile list is behind the control-token/cookie check: wait for the
+// bootstrap handshake instead of racing it on mount.
+watch(
+  () => state.ready,
+  (ready) => {
+    if (ready) loadProfiles()
+  },
+  { immediate: true },
+)
 
 function isOnline(bot: any): boolean {
   // 有实时 status 时以网关连接为准，否则退回 /_mqs/bots 返回的快照字段

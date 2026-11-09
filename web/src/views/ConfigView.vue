@@ -338,10 +338,6 @@ async function toggleProactive(bot: any) {
 }
 
 const nonebotIntents = {
-  guilds: false,
-  guild_members: false,
-  guild_messages: false,
-  guild_message_reactions: false,
   direct_message: false,
   open_forum_event: false,
   audio_live_member: false,
