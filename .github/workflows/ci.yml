@@ -147,10 +147,23 @@ jobs:
         run: npm install -g @tauri-apps/cli@^2
       - name: Build the desktop bundle
         working-directory: desktop/src-tauri
+        shell: bash
         env:
           # No signing identities on CI runners.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: tauri build
+        run: |
+          # The Linux bundler downloads linuxdeploy/AppRun from the GitHub CDN at bundle
+          # time and sometimes gets a 5xx there; the build itself is already done, so retry
+          # instead of failing the release on someone else's flaky edge.
+          for attempt in 1 2 3; do
+            if tauri build; then
+              ok=1
+              break
+            fi
+            echo "tauri build failed (attempt ${attempt}/3), retrying in 15s" >&2
+            sleep 15
+          done
+          test "${ok:-0}" = 1
       - name: Verify bundles were produced
         shell: bash
         run: |
