@@ -4,6 +4,12 @@
 //! desktop install is one binary and needs no sidecar (no Nuitka, no Python).
 //! The window loads the control GUI served by the embedded server.
 
+// Without this, a Windows *release* build is linked as a console program and
+// every launch of the installed mqs-desktop.exe pops up a black conhost window
+// (titled with the exe path) in front of the WebView window. Debug builds keep
+// the console so `tauri dev` still prints logs; DO NOT REMOVE.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::sync::Mutex;
 
 use mqs::config::ProcessConfig;

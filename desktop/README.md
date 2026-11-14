@@ -6,6 +6,10 @@
 - 启动顺序：`setup()` 里 `mqs::server::start()`（随机端口）→ 用返回的 GUI URL
   （`http://127.0.0.1:<control>/#t=<nonce>`）创建窗口 → 退出时优雅关闭服务。
 - 数据目录：`app_data_dir()/mqs-home`，不污染仓库或用户主目录。
+- **Windows 上不能有控制台窗口**：`src-tauri/src/main.rs` 顶部的
+  `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]` 不能删。缺了它，
+  二进制按控制台程序链接，安装包里的 `mqs-desktop.exe` 每次启动都会先弹一个黑色 conhost
+  窗口（标题就是 exe 路径），关掉它还会把整个进程一起带走。
 - 前端资源：构建 `desktop/src-tauri` 之前先 `cd web && npm run build`；`crates/mqs` 的
   `build.rs` 会把 `web/dist` 内嵌进二进制（缺失时退化为“前端尚未构建”页）。
 
