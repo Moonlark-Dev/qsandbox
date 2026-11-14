@@ -182,6 +182,8 @@ table.table { width: 100%; border-collapse: collapse; }
 .tag.warn { color: var(--yellow); border-color: color-mix(in srgb, var(--yellow) 35%, var(--border)); }
 .tag.err { color: var(--red); border-color: color-mix(in srgb, var(--red) 35%, var(--border)); }
 .tag.info { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+.tag.msg-tag { font-family: inherit; line-height: 1.4; cursor: pointer; }
+.tag.msg-tag:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
 
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
 .tab { padding: 8px 14px; border: 0; background: transparent; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; }
@@ -191,6 +193,13 @@ table.table { width: 100%; border-collapse: collapse; }
 .modal { width: min(520px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 20px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45); }
 .modal h3 { margin: 0 0 14px; font-size: 16px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.raw-modal { width: min(760px, calc(100vw - 32px)); }
+.raw-json {
+  margin: 0; max-height: min(62vh, 620px); overflow: auto;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 14px; font-family: var(--mono); font-size: 12px; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-word;
+}
 
 .auth-mask { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg); z-index: 100; }
 .auth-card { width: min(520px, calc(100vw - 32px)); }

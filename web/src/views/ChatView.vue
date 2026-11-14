@@ -29,6 +29,8 @@ const botState = ref<any>(null)
 const blacklist = ref<any[]>([])
 const joinRequests = ref<any[]>([])
 const viewerUrl = ref('')
+const rawMessage = ref<any>(null)
+const rawJson = ref('')
 const composerInput = ref<HTMLTextAreaElement | null>(null)
 
 const newGroupModal = ref(false)
@@ -218,8 +220,9 @@ async function send() {
 }
 
 function onKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape' && viewerUrl.value) {
+  if (event.key === 'Escape' && (viewerUrl.value || rawMessage.value)) {
     viewerUrl.value = ''
+    rawMessage.value = null
     return
   }
   if (event.ctrlKey && event.key === 'Tab') {
@@ -698,9 +701,40 @@ async function onBubbleClick(event: MouseEvent, message?: any) {
   if (src) viewerUrl.value = src
 }
 
+const RICH_TAGS: Record<number, string> = { 2: 'markdown', 3: 'ark', 4: 'embed', 7: 'media' }
+
 function msgTag(message: any): string {
-  const map: Record<number, string> = { 2: 'markdown', 3: 'ark', 4: 'embed', 7: 'media' }
-  return map[message.msg_type] || ''
+  const rich = RICH_TAGS[Number(message?.msg_type)]
+  if (rich) return rich
+  // Bot 的纯文本回复（msg_type=0）没有富消息标签，补一个 `text`，让每条
+  // Bot 消息都有可点的类型 badge 去看原始报文。
+  if (message?.sender_type === 'bot' && !Number(message?.msg_type)) return 'text'
+  return ''
+}
+
+// 控制 API 把数据库里存的原始报文放在 `raw`；老消息或只从广播里拿到的行
+// 可能没有它，这时退回整条消息（去掉派生的 sender）保证弹窗有内容。
+function messageJson(message: any): string {
+  const raw = message?.raw
+  if (raw && typeof raw === 'object' && Object.keys(raw).length) return JSON.stringify(raw, null, 2)
+  const copy: Record<string, any> = { ...(message || {}) }
+  delete copy.raw
+  delete copy.sender
+  return JSON.stringify(copy, null, 2)
+}
+
+function openMessageJson(message: any) {
+  rawMessage.value = message
+  rawJson.value = messageJson(message)
+}
+
+async function copyMessageJson() {
+  try {
+    await navigator.clipboard.writeText(rawJson.value)
+    toast('消息 JSON 已复制')
+  } catch {
+    toast('复制失败')
+  }
 }
 
 function attachments(message: any): any[] {
@@ -786,7 +820,16 @@ function isAudio(att: any): boolean {
                 <span :class="{ 'bot-name': message.sender_type === 'bot' }">{{ message.sender?.name || message.sender_id }}</span>
                 <span v-if="message.sender_type === 'bot'" class="tag info">BOT</span>
                 <span>{{ formatTime(message.sent_at) }}</span>
-                <span v-if="msgTag(message)" class="tag">{{ msgTag(message) }}</span>
+                <button
+                  v-if="msgTag(message) && message.sender_type === 'bot'"
+                  type="button"
+                  class="tag msg-tag"
+                  title="查看消息原始 JSON"
+                  @click="openMessageJson(message)"
+                >
+                  {{ msgTag(message) }}
+                </button>
+                <span v-else-if="msgTag(message)" class="tag">{{ msgTag(message) }}</span>
                 <span v-if="message.recalled_at" class="tag err">已撤回</span>
               </div>
               <div
@@ -1015,6 +1058,21 @@ function isAudio(att: any): boolean {
   <div v-if="viewerUrl" class="lightbox" @click.self="viewerUrl = ''">
     <img :src="viewerUrl" alt="图片预览" />
     <button class="btn small lightbox-close" @click="viewerUrl = ''">关闭</button>
+  </div>
+
+  <div v-if="rawMessage" class="modal-mask" @click.self="rawMessage = null">
+    <div class="modal raw-modal">
+      <div class="row" style="align-items: center; gap: 8px">
+        <h3 class="grow" style="margin: 0">消息原始 JSON</h3>
+        <span class="tag">{{ msgTag(rawMessage) }}</span>
+        <button class="btn small ghost" @click="copyMessageJson">复制</button>
+        <button class="btn small ghost" @click="rawMessage = null">关闭</button>
+      </div>
+      <div class="small faint mono" style="margin: 10px 0 8px">
+        {{ rawMessage.msg_id }} · {{ rawMessage.sender?.name || rawMessage.sender_id }}
+      </div>
+      <pre class="raw-json">{{ rawJson }}</pre>
+    </div>
   </div>
 
   <div v-if="newGroupModal" class="modal-mask" @click.self="newGroupModal = false">
