@@ -24,8 +24,12 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      # Only the bundles and the CLI archive: `web-dist` is an input to the
+      # builds, not something to publish. Each desktop artifact keeps the
+      # bundler's own layout (`appimage/`, `deb/`, `msi/`, …).
       - uses: actions/download-artifact@v4
         with:
+          pattern: qsandbox-*
           path: dist
           merge-multiple: true
       - name: Read the workspace version
@@ -34,17 +38,25 @@ jobs:
           tag="${GITHUB_REF_NAME#v}"
           test "$version" = "$tag" || { echo "tag $tag does not match Cargo.toml $version"; exit 1; }
       - name: List release files
-        run: ls -l dist
+        run: find dist -type f | sort
+      # The upload action does not recurse by itself, and each desktop artifact
+      # keeps the bundler's layout (`appimage/`, `deb/`, `msi/`, …). Flatten the
+      # bundles into one directory, and fail here — not with a vague glob error —
+      # when a platform silently produced nothing.
+      - name: Stage release assets
+        run: |
+          mkdir -p out
+          find dist -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
+            -o -name '*.msi' -o -name '*.exe' -o -name '*.dmg' -o -name 'mqs-linux-x64.tar.gz' \) \
+            -exec cp -v {} out/ \;
+          for ext in AppImage deb rpm msi exe dmg; do
+            ls out/*."$ext" > /dev/null || { echo "no .$ext bundle was produced"; exit 1; }
+          done
+          test -f out/mqs-linux-x64.tar.gz
+          ls -lh out
       - name: Upload artifacts to the GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/*.AppImage
-            dist/*.deb
-            dist/*.rpm
-            dist/*.msi
-            dist/*.exe
-            dist/*.dmg
-            dist/mqs-linux-x64.tar.gz
+          files: out/*
           fail_on_unmatched_files: true
           generate_release_notes: true
