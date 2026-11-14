@@ -178,6 +178,25 @@ jobs:
           echo "bundles: $found"
           find target/release/bundle -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.msi' -o -name '*.exe' -o -name '*.dmg' \)
           test "$found" -ge 1
+      # The one desktop regression that cannot show up on Linux/macOS: a Windows
+      # binary linked as a console program pops a black conhost window on every
+      # launch of the installed app. Assert the PE subsystem instead of trusting
+      # that nobody deletes the crate attribute.
+      - name: Windows binary is a GUI app (no console window)
+        if: matrix.target == 'win'
+        shell: pwsh
+        run: |
+          $exe = 'target/release/mqs-desktop.exe'
+          if (-not (Test-Path $exe)) { throw "missing $exe" }
+          $bytes = [IO.File]::ReadAllBytes($exe)
+          $pe = [BitConverter]::ToInt32($bytes, 0x3c)
+          # IMAGE_OPTIONAL_HEADER.Subsystem lies at PE + 24 + 68 for PE32 and PE32+.
+          # 2 = WINDOWS_GUI, 3 = WINDOWS_CUI.
+          $subsystem = [BitConverter]::ToUInt16($bytes, $pe + 24 + 68)
+          "mqs-desktop.exe PE subsystem = $subsystem"
+          if ($subsystem -ne 2) {
+            throw "mqs-desktop.exe is PE subsystem $subsystem, expected 2 (GUI): the windows_subsystem attribute is missing from desktop/src-tauri/src/main.rs"
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: qsandbox-${{ matrix.target }}
