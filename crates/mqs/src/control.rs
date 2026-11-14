@@ -716,6 +716,19 @@ async fn click_button(
     ))
 }
 
+async fn click_text_command(
+    State(state): State<Arc<AppState>>,
+    Path(message_id): Path<String>,
+    QqJson(payload): QqJson<TextCommandClick>,
+) -> MqsResult<Json<Value>> {
+    Ok(Json(
+        state
+            .world
+            .click_text_command(&payload.user_id, &message_id, payload.index.unwrap_or(0))
+            .await?,
+    ))
+}
+
 async fn chat_send(
     State(state): State<Arc<AppState>>,
     QqJson(payload): QqJson<ChatSend>,
@@ -1221,6 +1234,7 @@ pub fn control_router(state: Arc<AppState>) -> Router {
             get(list_messages),
         )
         .route("/_mqs/messages/{message_id}/click", post(click_button))
+        .route("/_mqs/messages/{message_id}/cmd", post(click_text_command))
         .route("/_mqs/chat/send", post(chat_send))
         .route("/_mqs/debug/frames", get(debug_frames))
         .route("/_mqs/debug/events", get(debug_events))

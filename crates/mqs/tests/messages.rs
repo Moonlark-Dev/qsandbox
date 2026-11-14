@@ -498,6 +498,123 @@ async fn keyboard_click_link_callback_and_command() {
 }
 
 #[tokio::test]
+async fn markdown_text_tags_resolve_mentions_and_push_commands() {
+    let test = Test::start().await;
+    test.settings(json!({"require_online": false})).await;
+    let user = test.user_id().await;
+    let group = test.group_id().await;
+    let conversation = format!("group:{group}");
+    test.send_as_user("menu", Some(vec!["10000"])).await;
+    let inbound = last_inbound(&test, &conversation).await;
+    let openid = test.group_openid("10000", &group).await;
+    let user_openid = test.user_openid("10000", &user).await;
+    let token = test.token("10000").await;
+    let users = test.ctl_ok("GET", "/_mqs/users", None).await;
+    let nickname = users
+        .as_array()
+        .expect("users is a list")
+        .iter()
+        .find(|row| row["id"] == user)
+        .and_then(|row| row["nickname"].as_str())
+        .unwrap()
+        .to_string();
+    // text/show 按官方要求 urlencode；`%21` = `!`、`%20` = 空格。
+    let markdown = format!(
+        "欢迎 <qqbot-at-user id=\"{user_openid}\" />，出牌 <qqbot-cmd-input text=\"%21sweet-potato%20pass%202\" show=\"%E6%9E%97%E6%9F%9A\" reference=\"true\" />，开局 <qqbot-cmd-enter text=\"%21start\" />"
+    );
+    let response = test
+        .http()
+        .post(format!("{}/v2/groups/{openid}/messages", test.sim))
+        .header("authorization", format!("QQBot {token}"))
+        .json(&json!({
+            "msg_type": 2,
+            "markdown": {"content": markdown},
+            "msg_id": inbound["msg_id"],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    let sent: Value = response.json().await.unwrap();
+    let message_id = sent["id"].as_str().unwrap().to_string();
+
+    // `at_users` 把 per-bot openid 翻成群昵称，GUI 才能像真机一样显示 @某人。
+    let message = test
+        .world()
+        .list_messages(&conversation, 50, None)
+        .unwrap()
+        .into_iter()
+        .find(|item| item["msg_id"] == message_id)
+        .unwrap();
+    assert_eq!(message["at_users"][0]["id"], user_openid);
+    assert_eq!(message["at_users"][0]["username"], nickname);
+
+    // cmd-input：点击后只回填输入框，并把 @bot / 引用意图告诉 GUI。
+    let (status, filled) = test
+        .ctl(
+            "POST",
+            &format!("/_mqs/messages/{message_id}/cmd"),
+            Some(json!({"user_id": user, "index": 0})),
+        )
+        .await;
+    assert_eq!(status, 200, "{filled}");
+    assert_eq!(filled["kind"], "command");
+    assert_eq!(filled["enter"], false);
+    assert_eq!(filled["reference"], true);
+    assert_eq!(filled["data"], "!sweet-potato pass 2");
+    assert_eq!(filled["show"], "林柚");
+    assert_eq!(filled["at_bots"], json!(["10000"]));
+    assert!(filled["message"].is_null());
+    let pushed = test.world().list_messages(&conversation, 50, None).unwrap();
+    assert!(
+        !pushed
+            .iter()
+            .any(|item| { item["direction"] == "in" && item["content"] == "!sweet-potato pass 2" }),
+        "cmd-input must wait for the user to press Enter"
+    );
+
+    // cmd-enter：点击即发送，群里自动 @ 这条消息的 Bot，事件也按 @ 投递。
+    let (status, ran) = test
+        .ctl(
+            "POST",
+            &format!("/_mqs/messages/{message_id}/cmd"),
+            Some(json!({"user_id": user, "index": 1})),
+        )
+        .await;
+    assert_eq!(status, 200, "{ran}");
+    assert_eq!(ran["kind"], "command");
+    assert_eq!(ran["enter"], true);
+    assert_eq!(ran["message"]["content"], "!start");
+    assert_eq!(ran["message"]["raw"]["at_bots"], json!(["10000"]));
+    let events = test
+        .world()
+        .list_events(0, 500, Some(&conversation))
+        .unwrap();
+    let event = events
+        .iter()
+        .rev()
+        .find(|event| {
+            event["payload"]["content"]
+                .as_str()
+                .map(|content| content.ends_with("!start"))
+                .unwrap_or(false)
+        })
+        .expect("the pushed command should be delivered to the bot");
+    assert_eq!(event["payload"]["mentions"][0]["is_you"], true);
+
+    // 越界索引是 10001，而不是 panic。
+    let (status, error) = test
+        .ctl(
+            "POST",
+            &format!("/_mqs/messages/{message_id}/cmd"),
+            Some(json!({"user_id": user, "index": 9})),
+        )
+        .await;
+    assert_eq!(status, 400);
+    assert_eq!(error["code"], 10001);
+}
+
+#[tokio::test]
 async fn recall_has_the_official_two_minute_limit() {
     let test = Test::start().await;
     test.settings(json!({"require_online": false})).await;

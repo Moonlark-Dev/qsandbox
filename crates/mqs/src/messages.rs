@@ -9,6 +9,7 @@ use crate::error::{
 };
 use crate::ids::{new_event_id, new_msg_id, openid_for, union_openid_for};
 use crate::p;
+use crate::text_tags::{self, TextTag};
 use crate::world::{World, BOT_SCOPE_C2C, BOT_SCOPE_GROUP, BOT_SCOPE_MEDIA};
 
 struct Delivery {
@@ -670,6 +671,14 @@ impl World {
             Value::String(self.clock.iso(Some(sent_at))),
         );
         raw.insert("msg_seq".into(), Value::from(msg_seq));
+        // `<qqbot-at-user id="…">` 里的 openid 是给客户端看的，控制台要把它翻译成
+        // 昵称才能像真机一样显示 `@某人`。普通字段原样保留，另加 `at_users` 供 GUI 用。
+        if let Some(source) = markdown_source(body) {
+            let at_users = self.resolve_at_users(bot_id, source)?;
+            if !at_users.is_empty() {
+                raw.insert("at_users".into(), Value::Array(at_users));
+            }
+        }
         let mut attachments: Vec<Value> = Vec::new();
         if let Some(file_info) = body
             .get("media")
@@ -951,6 +960,128 @@ impl World {
         Ok(Value::Object(out))
     }
 
+    /// 解析 Markdown 里的 `<qqbot-at-user id="…"/>`，把 per-bot openid 翻成昵称。
+    /// 解析不到（别的 Bot 的 openid、已退群成员）时保留 openid，由 GUI 兜底显示。
+    fn resolve_at_users(&self, bot_id: &str, source: &str) -> MqsResult<Vec<Value>> {
+        let mut out: Vec<Value> = Vec::new();
+        for tag in text_tags::parse(source) {
+            let TextTag::AtUser { id } = tag else {
+                continue;
+            };
+            if out.iter().any(|item| item["id"] == id) {
+                continue;
+            }
+            let username = match self.db.one(
+                "SELECT kind, entity_id FROM openid_map WHERE bot_id=? AND openid=?",
+                &p![bot_id, &id],
+            )? {
+                Some(mapping) if s(&mapping, "kind") == "user" => self
+                    .db
+                    .one(
+                        "SELECT nickname FROM users WHERE id=?",
+                        &p![s(&mapping, "entity_id")],
+                    )?
+                    .map(|user| s(&user, "nickname"))
+                    .unwrap_or_default(),
+                _ => String::new(),
+            };
+            out.push(json!({"id": id, "username": username}));
+        }
+        Ok(out)
+    }
+
+    /// 模拟用户点击 Markdown 正文里的指令标签（`<qqbot-cmd-enter>` /
+    /// `<qqbot-cmd-input>`）。`index` 是正文里第几个指令标签（从 0 开始）。
+    ///
+    /// `cmd-enter` 点击即发送（群里自动 @ 发消息的 Bot，与指令按钮一致）；
+    /// `cmd-input` 只回填输入框，由用户在 GUI 里按 Enter 发送。
+    pub async fn click_text_command(
+        &self,
+        user_id: &str,
+        message_id: &str,
+        index: i64,
+    ) -> MqsResult<Value> {
+        let row = self
+            .db
+            .one("SELECT * FROM messages WHERE msg_id=?", &p![message_id])?
+            .ok_or_else(|| message_not_found("message is not an outbound bot message"))?;
+        if s(&row, "direction") != "out" {
+            return Err(message_not_found("message is not an outbound bot message"));
+        }
+        if self
+            .db
+            .one("SELECT 1 FROM users WHERE id=?", &p![user_id])?
+            .is_none()
+        {
+            return Err(invalid_param("unknown user"));
+        }
+        let raw = json_col(&row, "raw_json", json!({}));
+        let source = markdown_source(&raw)
+            .ok_or_else(|| invalid_param("message has no markdown content"))?;
+        let commands: Vec<TextTag> = text_tags::parse(source)
+            .into_iter()
+            .filter(TextTag::is_command)
+            .collect();
+        if index < 0 || index as usize >= commands.len() {
+            return Err(invalid_param("text command index out of range"));
+        }
+        let (enter, data, show, reference) = match &commands[index as usize] {
+            TextTag::CmdEnter { text } => (true, text.clone(), text.clone(), false),
+            TextTag::CmdInput {
+                text,
+                show,
+                reference,
+            } => (false, text.clone(), show.clone(), *reference),
+            _ => return Err(internal("text command filter mismatch")),
+        };
+        let conversation_id = s(&row, "conversation_id");
+        let bot_id = s(&row, "bot_id");
+        let is_group = conversation_id.starts_with("group:");
+        // 与真机一致：群里点指令会 @ 发这条消息的 Bot，单聊则直接发。
+        let at_bots: Vec<String> = if is_group {
+            vec![bot_id.clone()]
+        } else {
+            Vec::new()
+        };
+        if !enter {
+            return Ok(json!({
+                "kind": "command",
+                "enter": false,
+                "reference": reference,
+                "show": show,
+                "data": data,
+                "at_bots": at_bots,
+                "message": null,
+            }));
+        }
+        let result = self
+            .send_as_user(
+                &conversation_id,
+                user_id,
+                &data,
+                0,
+                &[],
+                if is_group { Some(&at_bots[..]) } else { None },
+                if is_group { Some(&at_bots[..]) } else { None },
+                None,
+                &[],
+            )
+            .await?;
+        let mut out = Map::new();
+        if let Some(object) = result.as_object() {
+            for (key, value) in object {
+                out.insert(key.clone(), value.clone());
+            }
+        }
+        out.insert("kind".into(), Value::String("command".into()));
+        out.insert("enter".into(), Value::Bool(true));
+        out.insert("reference".into(), Value::Bool(reference));
+        out.insert("show".into(), Value::String(show));
+        out.insert("data".into(), Value::String(data));
+        out.insert("at_bots".into(), json!(at_bots));
+        Ok(Value::Object(out))
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn emit_button_interaction(
         &self,
@@ -1082,4 +1213,19 @@ fn validate_send_body(body: &Value) -> MqsResult<()> {
         }
     }
     Ok(())
+}
+
+/// 出站消息里可展示的 Markdown 正文：官方字段是 `markdown.content`；
+/// `msg_type=2` 且正文直接放在 `content` 里的写法也兼容（部分客户端如此）。
+fn markdown_source(raw: &Value) -> Option<&str> {
+    raw.get("markdown")
+        .and_then(|markdown| markdown.get("content"))
+        .and_then(Value::as_str)
+        .filter(|content| !content.is_empty())
+        .or_else(|| {
+            (raw.get("msg_type").and_then(Value::as_i64) == Some(2))
+                .then(|| raw.get("content").and_then(Value::as_str))
+                .flatten()
+                .filter(|content| !content.is_empty())
+        })
 }

@@ -55,6 +55,7 @@ import mqs.compat.botpy   # 必须在创建 botpy.Client 之前 import
 | 11 | 错误体同时输出 `code` 与 `err_code`（同值） | 无影响，纯加字段 | 官方 token 接口用 `code`、message 类接口用 `err_code`，两者都兼容 |
 | 12 | 被动回复除 `msg_id` 外也接受 `event_id`（按钮回调等事件） | 无影响 | 官方行为；沙箱未校验 event 白名单，比真机宽松 |
 | 13 | `INTERACTION_CREATE.chat_type`：群=1、单聊=2（官方 0=频道） | 频道不在本产品内 | 与官方数值一致 |
+| 14 | Markdown 文本交互标签（`<qqbot-at-user>`/`<qqbot-at-everyone>`/`<qqbot-cmd-*>`）由 GUI 模拟：`at_users` 是控制 API 返回的额外字段，点击指令走 `POST /_mqs/messages/{id}/cmd` | 直接断言 REST 事件的 `mentions` 不会因 Markdown 标签自动补齐；标签只在 GUI 里可见/可点 | 官方由客户端解析并渲染；沙箱把 openid→昵称放进 `at_users`，推送语义（群里 @Bot、`reference` 引用）与控制 API 保持一致 |
 
 ## 端口与域名假设
 

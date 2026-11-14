@@ -24,6 +24,7 @@ pub mod ratelimit;
 pub mod scenario;
 pub mod server;
 pub mod sim;
+pub mod text_tags;
 pub mod webhooks;
 pub mod world;
 

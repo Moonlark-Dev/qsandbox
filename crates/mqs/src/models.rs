@@ -173,6 +173,12 @@ pub struct KeyboardClick {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TextCommandClick {
+    pub user_id: String,
+    pub index: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct JoinRequestCreate {
     pub user_id: String,
     pub verify_message: Option<String>,

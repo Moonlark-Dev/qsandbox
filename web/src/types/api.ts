@@ -274,6 +274,11 @@ export interface KeyboardClick {
   index?: number;
 }
 
+export interface TextCommandClick {
+  user_id: string;
+  index?: number;
+}
+
 export interface JoinRequestCreate {
   user_id: string;
   verify_message?: string;

@@ -1326,6 +1326,7 @@ impl World {
             "message_reference",
             "mentions",
             "at_bots",
+            "at_users",
             "attachments",
         ] {
             if let Some(value) = raw.get(key) {

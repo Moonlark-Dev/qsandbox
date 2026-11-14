@@ -18,6 +18,69 @@ export function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (char) => ESCAPES[char] ?? char)
 }
 
+export interface MarkdownOptions {
+  /** Resolve `<qqbot-at-user id="…">`'s openid to a group nickname. */
+  atUser?: (id: string) => string | undefined
+}
+
+// QQ text-interaction tags (official `trans/text-chain.html`).  They are part
+// of the Markdown body, so they are rendered as the client would render them:
+// an `@某人` chip for mentions and a clickable command chip for `/指令`.
+// Keep this grammar in sync with `crates/mqs/src/text_tags.rs`: the server
+// parses the same tags to decide which command a click pushes, and both sides
+// must agree on how many command tags exist (the GUI only sends the index).
+const QQ_TAG_RE =
+  /<qqbot-(at-user|at-everyone|cmd-enter|cmd-input)((?:\s+[A-Za-z][A-Za-z0-9-]*\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*\/?>/g
+const QQ_ATTR_RE = /([A-Za-z][A-Za-z0-9-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
+
+function tagAttributes(source: string): Record<string, string> {
+  const attrs: Record<string, string> = {}
+  let match: RegExpExecArray | null
+  QQ_ATTR_RE.lastIndex = 0
+  while ((match = QQ_ATTR_RE.exec(source))) {
+    // Duplicate attribute names: the last one wins, like the Rust parser.
+    attrs[match[1].toLowerCase()] = match[2] ?? match[3] ?? ''
+  }
+  return attrs
+}
+
+// The official docs require `text`/`show` to be urlencoded before embedding.
+function decodeTagValue(raw: string): string {
+  if (!raw) return ''
+  try {
+    return decodeURIComponent(raw)
+  } catch {
+    return raw
+  }
+}
+
+function renderQqTag(
+  name: string,
+  rawAttributes: string,
+  options: MarkdownOptions,
+): string {
+  const attrs = tagAttributes(rawAttributes)
+  if (name === 'at-everyone') {
+    return `<span class="qq-at qq-at-all" title="@全体成员">@全体成员</span>`
+  }
+  if (name === 'at-user') {
+    const id = decodeTagValue(attrs.id || '')
+    if (!id) return ''
+    const resolved = options.atUser?.(id)?.trim()
+    const label = resolved || '成员'
+    return `<span class="qq-at" data-qq-at="${escapeHtml(id)}" title="${escapeHtml(resolved ? `@${resolved}` : id)}">@${escapeHtml(label)}</span>`
+  }
+  const text = decodeTagValue(attrs.text || '')
+  if (!text) return ''
+  if (name === 'cmd-enter') {
+    return `<button type="button" class="qq-cmd" data-qq-cmd="enter" title="${escapeHtml(`点击直接发送：${text}`)}">${escapeHtml(text)}</button>`
+  }
+  const show = decodeTagValue(attrs.show || '') || text
+  const reference = (attrs.reference || '').trim().toLowerCase() === 'true'
+  const hint = reference ? '点击填入输入框并引用本条消息' : '点击填入输入框'
+  return `<button type="button" class="qq-cmd" data-qq-cmd="input" data-qq-reference="${reference}" title="${escapeHtml(`${hint}：${text}`)}">${escapeHtml(show)}</button>`
+}
+
 function safeUrl(raw: string): string | null {
   // `raw` has already been HTML-escaped, so turn &amp; back into & before
   // validating and writing it into the href/src attribute.
@@ -27,7 +90,7 @@ function safeUrl(raw: string): string | null {
   return null
 }
 
-function renderInline(source: string): string {
+function renderInline(source: string, options: MarkdownOptions): string {
   // Code spans, images and links are pulled out as opaque tokens first, so
   // emphasis markers inside a URL or a code span cannot corrupt the markup.
   const tokens: string[] = []
@@ -39,6 +102,12 @@ function renderInline(source: string): string {
   let text = source.replace(/`([^`\n]+)`/g, (_, inner: string) =>
     keep(`<code>${escapeHtml(inner)}</code>`),
   )
+  // Text-interaction tags are pulled out before escaping, so `<qqbot-…>` is
+  // never shown verbatim; anything unrecognised stays plain text.
+  text = text.replace(QQ_TAG_RE, (match, name: string, attrs: string) => {
+    const html = renderQqTag(name, attrs, options)
+    return html ? keep(html) : match
+  })
   text = escapeHtml(text)
 
   text = text.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (match, alt: string, url: string) => {
@@ -88,7 +157,7 @@ function startsBlock(lines: string[], index: number): boolean {
   return false
 }
 
-function renderBlocks(source: string): string {
+function renderBlocks(source: string, options: MarkdownOptions): string {
   const lines = source.replace(/\r\n?/g, '\n').split('\n')
   const blocks: string[] = []
   let index = 0
@@ -114,7 +183,7 @@ function renderBlocks(source: string): string {
     const heading = line.match(/^(#{1,6})\s+(.*)$/)
     if (heading) {
       const level = heading[1].length
-      blocks.push(`<h${level}>${renderInline(heading[2])}</h${level}>`)
+      blocks.push(`<h${level}>${renderInline(heading[2], options)}</h${level}>`)
       index++
       continue
     }
@@ -130,7 +199,7 @@ function renderBlocks(source: string): string {
       while (index < lines.length && /^>\s?/.test(lines[index])) {
         quote.push(lines[index++].replace(/^>\s?/, ''))
       }
-      blocks.push(`<blockquote>${renderBlocks(quote.join('\n'))}</blockquote>`)
+      blocks.push(`<blockquote>${renderBlocks(quote.join('\n'), options)}</blockquote>`)
       continue
     }
 
@@ -141,7 +210,7 @@ function renderBlocks(source: string): string {
       while (index < lines.length) {
         const item = lines[index].match(/^(\s*)([-+*]|\d+[.)])\s+(.*)$/)
         if (!item || /^\d/.test(item[2]) !== ordered) break
-        items.push(`<li>${renderInline(item[3])}</li>`)
+        items.push(`<li>${renderInline(item[3], options)}</li>`)
         index++
       }
       const tag = ordered ? 'ol' : 'ul'
@@ -157,10 +226,10 @@ function renderBlocks(source: string): string {
         rows.push(splitRow(lines[index++]))
       }
       const head = header
-        .map((cell) => `<th>${renderInline(cell)}</th>`)
+        .map((cell) => `<th>${renderInline(cell, options)}</th>`)
         .join('')
       const body = rows
-        .map((row) => `<tr>${header.map((_, cell) => `<td>${renderInline(row[cell] ?? '')}</td>`).join('')}</tr>`)
+        .map((row) => `<tr>${header.map((_, cell) => `<td>${renderInline(row[cell] ?? '', options)}</td>`).join('')}</tr>`)
         .join('')
       blocks.push(`<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`)
       continue
@@ -168,22 +237,40 @@ function renderBlocks(source: string): string {
 
     const paragraph: string[] = []
     while (index < lines.length && !startsBlock(lines, index)) paragraph.push(lines[index++])
-    blocks.push(`<p>${renderInline(paragraph.join('\n')).replace(/\n/g, '<br />')}</p>`)
+    blocks.push(`<p>${renderInline(paragraph.join('\n'), options).replace(/\n/g, '<br />')}</p>`)
   }
 
   return blocks.join('\n')
 }
 
 /** Render Markdown to safe HTML. */
-export function renderMarkdown(source: string): string {
+export function renderMarkdown(source: string, options: MarkdownOptions = {}): string {
   if (!source || !source.trim()) return ''
-  return renderBlocks(source)
+  return renderBlocks(source, options)
+}
+
+/** Flatten QQ text-interaction tags for one-line previews. */
+function plainQqTag(source: string, options: MarkdownOptions): string {
+  return source
+    .replace(
+      /<qqbot-at-user\s+id\s*=\s*(?:"([^"]*)"|'([^']*)')\s*\/?>/g,
+      (match, doubleQuoted: string, singleQuoted: string) => {
+        const id = decodeTagValue(doubleQuoted || singleQuoted || '')
+        if (!id) return match
+        return `@${options.atUser?.(id)?.trim() || '成员'}`
+      },
+    )
+    .replace(/<qqbot-at-everyone\s*\/?>/g, '@全体成员')
+    .replace(/<qqbot-cmd-(?:enter|input)\b([^>]*)\/?>/g, (match, rawAttributes: string) => {
+      const attrs = tagAttributes(rawAttributes || '')
+      return decodeTagValue(attrs.show || '') || decodeTagValue(attrs.text || '') || match
+    })
 }
 
 /** Flatten Markdown for one-line previews (conversation list, tooltips). */
-export function markdownPlain(source: string): string {
+export function markdownPlain(source: string, options: MarkdownOptions = {}): string {
   if (!source) return ''
-  return source
+  return plainQqTag(source, options)
     .replace(/\r\n?/g, '\n')
     .replace(/```[\w+-]*\n?([\s\S]*?)```/g, (_, body: string) => body.trim())
     .replace(/!\[([^\]]*)\]\([^)\s]+\)/g, (_, alt: string) => alt || '[图片]')

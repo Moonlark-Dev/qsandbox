@@ -16,6 +16,11 @@ const addMemberId = ref('')
 const hud = ref('')
 const loading = ref(false)
 const messagePane = ref<HTMLElement | null>(null)
+// Distance from the real bottom (in px) that still counts as "读到了最后".
+const BOTTOM_GAP = 48
+const atBottom = ref(true)
+let settleUntil = 0
+let settleTimer = 0
 const pendingAttachments = ref<any[]>([])
 const fileInput = ref<HTMLInputElement | null>(null)
 const uploading = ref(false)
@@ -131,6 +136,7 @@ async function loadMessages(id: string) {
     await scrollToBottom()
   } catch {
     messages.value = []
+    atBottom.value = true
   } finally {
     loading.value = false
   }
@@ -148,14 +154,43 @@ async function loadMembers(groupId: string) {
 function handleLiveMessage(data: any) {
   if (data.conversation_id === activeConversationId.value) {
     messages.value = [...messages.value, data.message]
-    scrollToBottom()
+    // Only follow new messages while the reader is already at the bottom;
+    // otherwise keep their position (the "跳到最后" icon then shows up).
+    if (isMine(data.message) || atBottom.value) scrollToBottom()
   }
 }
 
-async function scrollToBottom() {
+function distanceToBottom(pane: HTMLElement): number {
+  return pane.scrollHeight - pane.scrollTop - pane.clientHeight
+}
+
+function onMessageScroll() {
+  const pane = messagePane.value
+  if (!pane || Date.now() < settleUntil) return
+  atBottom.value = distanceToBottom(pane) <= BOTTOM_GAP
+}
+
+async function scrollToBottom(behavior: ScrollBehavior = 'auto') {
   await nextTick()
   const pane = messagePane.value
-  if (pane) pane.scrollTop = pane.scrollHeight
+  if (!pane) return
+  atBottom.value = true
+  const smooth =
+    behavior === 'smooth' && !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  if (!smooth) {
+    pane.scrollTop = pane.scrollHeight
+    return
+  }
+  pane.scrollTo({ top: pane.scrollHeight, behavior: 'smooth' })
+  // The smooth animation scrolls through intermediate offsets; ignore those
+  // scroll events so the icon does not blink back into view mid-flight.
+  window.clearTimeout(settleTimer)
+  settleUntil = Date.now() + 800
+  settleTimer = window.setTimeout(() => {
+    settleUntil = 0
+    const current = messagePane.value
+    atBottom.value = current ? distanceToBottom(current) <= BOTTOM_GAP : true
+  }, 800)
 }
 
 async function send() {
@@ -500,9 +535,21 @@ function renderText(message: any, forPreview = false): string {
   return prefix ? (body ? `${prefix} ${body}` : prefix) : body
 }
 
+// `<qqbot-at-user id="…"/>` 里是当前 Bot 的 openid；控制 API 把能解析的
+// `at_users: [{id, username}]` 一起带回来，渲染时据此显示 `@昵称`。
+function atUserName(message: any, id: string): string | undefined {
+  const list = message?.at_users || message?.raw?.at_users || []
+  const hit = list.find((item: any) => item?.id === id)
+  return hit?.username || undefined
+}
+
+function markdownOptions(message: any) {
+  return { atUser: (id: string) => atUserName(message, id) }
+}
+
 function renderBody(message: any, forPreview = false): string {
   const markdown = markdownSource(message)
-  if (markdown) return forPreview ? markdownPlain(markdown) : markdown
+  if (markdown) return forPreview ? markdownPlain(markdown, markdownOptions(message)) : markdown
   if (message.content && message.content.trim()) return display(message.content)
   const raw = message.raw || message
   if (raw.ark?.kv?.length) {
@@ -521,7 +568,7 @@ function renderBody(message: any, forPreview = false): string {
 
 function markdownHtml(message: any): string {
   const prefix = mentionPrefix(message)
-  const body = renderMarkdown(markdownSource(message))
+  const body = renderMarkdown(markdownSource(message), markdownOptions(message))
   return prefix ? `<p class="mention-line">${escapeHtml(prefix)}</p>${body}` : body
 }
 
@@ -605,8 +652,46 @@ async function clickButton(message: any, button: any) {
   }
 }
 
-function onBubbleClick(event: MouseEvent) {
+async function clickInlineCommand(message: any, chip: HTMLElement) {
+  if (message.recalled_at) return
+  // The server parses the Markdown tags itself; the GUI only tells it which
+  // command chip was clicked (document order), so urlencoded text and the
+  // @bot / quote behaviour stay in one place.
+  const bubble = chip.closest('.msg-bubble')
+  const chips = bubble ? Array.from(bubble.querySelectorAll('[data-qq-cmd]')) : []
+  const index = Math.max(0, chips.indexOf(chip))
+  try {
+    const result = await api.post<any>(`/_mqs/messages/${encodeURIComponent(message.msg_id)}/cmd`, {
+      user_id: currentUserId.value,
+      index,
+    })
+    if (result.enter === false) {
+      // `/参数指令`：只插入输入框，带引用时同时引用本条消息。
+      text.value = result.data || ''
+      selectedBots.value = Array.isArray(result.at_bots) ? result.at_bots : []
+      replyTo.value = result.reference ? message : null
+      toast(result.reference ? '已填入指令并引用本条消息，按 Enter 发送' : '已填入指令，按 Enter 发送')
+      await nextTick()
+      composerInput.value?.focus()
+      return
+    }
+    toast('指令已发送')
+    await loadMessages(activeConversationId.value)
+    await refreshWorld()
+    await refreshStatus()
+  } catch (error) {
+    toast(error instanceof Error ? error.message : String(error))
+  }
+}
+
+async function onBubbleClick(event: MouseEvent, message?: any) {
   const target = event.target as HTMLElement | null
+  const chip = target?.closest?.('[data-qq-cmd]') as HTMLElement | null
+  if (chip) {
+    event.preventDefault()
+    if (message) await clickInlineCommand(message, chip)
+    return
+  }
   if (target?.tagName !== 'IMG') return
   event.preventDefault()
   const src = (target as HTMLImageElement).src
@@ -689,68 +774,80 @@ function isAudio(att: any): boolean {
         <button v-if="dmTarget" class="btn small ghost" @click="dmTarget = null">退出私聊</button>
       </header>
 
-      <div ref="messagePane" class="messages">
-        <div v-if="!messages.length" class="empty">
-          {{ dmTarget ? '还没有私聊消息，发一句试试' : '还没有消息' }}
-        </div>
-        <div v-for="message in messages" :key="message.msg_id" class="msg" :class="{ out: isMine(message) }">
-          <img v-if="message.sender" class="avatar sm" :src="message.sender.avatar" alt="" />
-          <div>
-            <div class="msg-meta">
-              <span :class="{ 'bot-name': message.sender_type === 'bot' }">{{ message.sender?.name || message.sender_id }}</span>
-              <span v-if="message.sender_type === 'bot'" class="tag info">BOT</span>
-              <span>{{ formatTime(message.sent_at) }}</span>
-              <span v-if="msgTag(message)" class="tag">{{ msgTag(message) }}</span>
-              <span v-if="message.recalled_at" class="tag err">已撤回</span>
-            </div>
-            <div
-              class="msg-bubble"
-              :style="message.recalled_at ? 'opacity: .55; text-decoration: line-through' : ''"
-              @click="onBubbleClick"
-            >
+      <div class="messages-wrap">
+        <div ref="messagePane" class="messages" @scroll.passive="onMessageScroll">
+          <div v-if="!messages.length" class="empty">
+            {{ dmTarget ? '还没有私聊消息，发一句试试' : '还没有消息' }}
+          </div>
+          <div v-for="message in messages" :key="message.msg_id" class="msg" :class="{ out: isMine(message) }">
+            <img v-if="message.sender" class="avatar sm" :src="message.sender.avatar" alt="" />
+            <div>
+              <div class="msg-meta">
+                <span :class="{ 'bot-name': message.sender_type === 'bot' }">{{ message.sender?.name || message.sender_id }}</span>
+                <span v-if="message.sender_type === 'bot'" class="tag info">BOT</span>
+                <span>{{ formatTime(message.sent_at) }}</span>
+                <span v-if="msgTag(message)" class="tag">{{ msgTag(message) }}</span>
+                <span v-if="message.recalled_at" class="tag err">已撤回</span>
+              </div>
               <div
-                v-if="markdownSource(message)"
-                class="msg-text markdown-body"
-                v-html="markdownHtml(message)"
-              ></div>
-              <div v-else-if="renderText(message)" class="msg-text plain-text">{{ renderText(message) }}</div>
-              <div v-if="keyboardButtons(message).length" class="keyboard-row">
-                <button
-                  v-for="button in keyboardButtons(message)"
-                  :key="button.index"
-                  type="button"
-                  class="keyboard-btn"
-                  :class="{ 'keyboard-disabled': message.recalled_at }"
-                  :title="buttonHint(button)"
-                  :disabled="!!message.recalled_at"
-                  @click="clickButton(message, button)"
-                >
-                  {{ button.label }}
-                </button>
+                class="msg-bubble"
+                :style="message.recalled_at ? 'opacity: .55; text-decoration: line-through' : ''"
+                @click="onBubbleClick($event, message)"
+              >
+                <div
+                  v-if="markdownSource(message)"
+                  class="msg-text markdown-body"
+                  v-html="markdownHtml(message)"
+                ></div>
+                <div v-else-if="renderText(message)" class="msg-text plain-text">{{ renderText(message) }}</div>
+                <div v-if="keyboardButtons(message).length" class="keyboard-row">
+                  <button
+                    v-for="button in keyboardButtons(message)"
+                    :key="button.index"
+                    type="button"
+                    class="keyboard-btn"
+                    :class="{ 'keyboard-disabled': message.recalled_at }"
+                    :title="buttonHint(button)"
+                    :disabled="!!message.recalled_at"
+                    @click="clickButton(message, button)"
+                  >
+                    {{ button.label }}
+                  </button>
+                </div>
+                <div v-if="attachments(message).length" class="msg-attachments">
+                  <template v-for="att in attachments(message)" :key="att.id || att.url">
+                    <img
+                      v-if="isImage(att) && att.url"
+                      class="msg-image"
+                      :src="att.url"
+                      :alt="att.filename || '图片'"
+                      loading="lazy"
+                      title="点击查看大图"
+                    />
+                    <video v-else-if="isVideo(att) && att.url" class="msg-video" :src="att.url" controls></video>
+                    <audio v-else-if="isAudio(att) && att.url" :src="att.url" controls></audio>
+                    <a v-else-if="att.url" :href="att.url" target="_blank" rel="noopener" class="small mono">
+                      {{ att.filename || att.url }}
+                    </a>
+                  </template>
+                </div>
               </div>
-              <div v-if="attachments(message).length" class="msg-attachments">
-                <template v-for="att in attachments(message)" :key="att.id || att.url">
-                  <img
-                    v-if="isImage(att) && att.url"
-                    class="msg-image"
-                    :src="att.url"
-                    :alt="att.filename || '图片'"
-                    loading="lazy"
-                    title="点击查看大图"
-                  />
-                  <video v-else-if="isVideo(att) && att.url" class="msg-video" :src="att.url" controls></video>
-                  <audio v-else-if="isAudio(att) && att.url" :src="att.url" controls></audio>
-                  <a v-else-if="att.url" :href="att.url" target="_blank" rel="noopener" class="small mono">
-                    {{ att.filename || att.url }}
-                  </a>
-                </template>
+              <div class="msg-meta">
+                <button class="btn small ghost" @click="quote(message)">引用</button>
               </div>
-            </div>
-            <div class="msg-meta">
-              <button class="btn small ghost" @click="quote(message)">引用</button>
             </div>
           </div>
         </div>
+        <button
+          v-if="messages.length && !atBottom"
+          type="button"
+          class="jump-latest"
+          title="跳到最后"
+          aria-label="跳到最后"
+          @click="scrollToBottom('smooth')"
+        >
+          ↓
+        </button>
       </div>
 
       <div class="composer">
