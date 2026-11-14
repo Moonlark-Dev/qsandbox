@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { api, formatTime } from '../api'
+import { escapeHtml, markdownPlain, renderMarkdown } from '../markdown'
 import { onLiveMessage, refreshStatus, refreshWorld, state, toast } from '../store'
 
 const currentId = ref<string>('')
@@ -22,6 +23,8 @@ const groupInfo = ref<any>(null)
 const botState = ref<any>(null)
 const blacklist = ref<any[]>([])
 const joinRequests = ref<any[]>([])
+const viewerUrl = ref('')
+const composerInput = ref<HTMLTextAreaElement | null>(null)
 
 const newGroupModal = ref(false)
 const groupForm = reactive({ name: '', members: 5, bot_ids: [] as string[] })
@@ -180,6 +183,10 @@ async function send() {
 }
 
 function onKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && viewerUrl.value) {
+    viewerUrl.value = ''
+    return
+  }
   if (event.ctrlKey && event.key === 'Tab') {
     event.preventDefault()
     const users = humanUsers.value
@@ -475,6 +482,17 @@ function mentionPrefix(message: any): string {
     .join(' ')
 }
 
+function markdownSource(message: any): string {
+  if (!message) return ''
+  const raw = message.raw || message
+  const content = typeof raw?.markdown?.content === 'string' ? raw.markdown.content : ''
+  if (content.trim()) return content
+  // msg_type=2 is the Markdown message type; some clients put the document in
+  // `content` instead of the `markdown.content` field.
+  if (Number(message.msg_type) === 2 && typeof message.content === 'string') return message.content
+  return ''
+}
+
 function renderText(message: any, forPreview = false): string {
   if (!message) return ''
   const prefix = mentionPrefix(message)
@@ -483,9 +501,10 @@ function renderText(message: any, forPreview = false): string {
 }
 
 function renderBody(message: any, forPreview = false): string {
+  const markdown = markdownSource(message)
+  if (markdown) return forPreview ? markdownPlain(markdown) : markdown
   if (message.content && message.content.trim()) return display(message.content)
   const raw = message.raw || message
-  if (raw.markdown?.content) return raw.markdown.content
   if (raw.ark?.kv?.length) {
     return raw.ark.kv
       .map((item: any) => item.value || item.key || '')
@@ -498,6 +517,12 @@ function renderBody(message: any, forPreview = false): string {
   if (raw.media || message.attachments?.length) return forPreview ? '[媒体消息]' : ''
   if (raw.keyboard?.content?.rows?.length) return forPreview ? '[消息按钮]' : ''
   return forPreview ? '[空消息]' : ''
+}
+
+function markdownHtml(message: any): string {
+  const prefix = mentionPrefix(message)
+  const body = renderMarkdown(markdownSource(message))
+  return prefix ? `<p class="mention-line">${escapeHtml(prefix)}</p>${body}` : body
 }
 
 function preview(message: any): string {
@@ -513,16 +538,29 @@ function keyboardButtons(message: any): any[] {
       index: index++,
       label: button.render_data?.label || button.action?.data || '按钮',
       data: button.action?.data || '',
+      // Official action.type: 0 = link, 1 = callback, 2 = command.
       type: Number(button.action?.type ?? 1),
-      enter: button.action?.enter !== false,
+      enter: button.action?.enter === true,
+      reply: button.action?.reply === true,
+      anchor: typeof button.action?.anchor === 'number' ? button.action.anchor : null,
     }
     return item
   })
 }
 
+function buttonHint(button: any): string {
+  if (button.type === 0) return `打开链接：${button.data}`
+  if (button.type === 2) {
+    const mode = button.enter ? '点击后自动发送' : '点击后填入输入框'
+    const reply = button.reply ? '，并引用本条消息' : ''
+    return `${mode}${reply}：${button.data}`
+  }
+  return `触发回调：${button.data}`
+}
+
 async function clickButton(message: any, button: any) {
   if (message.recalled_at) return
-  if (button.type === 0 || (!button.type && /^https?:\/\//.test(button.data))) {
+  if (button.type === 0) {
     if (button.data) window.open(button.data, '_blank', 'noopener')
     return
   }
@@ -540,12 +578,39 @@ async function clickButton(message: any, button: any) {
       await refreshStatus()
       return
     }
+    if (result.kind === 'command' && result.enter === false) {
+      // The official default: insert @bot + command into the input box and
+      // wait for the user to press Enter.
+      text.value = result.data || ''
+      selectedBots.value = Array.isArray(result.at_bots) ? result.at_bots : []
+      replyTo.value = result.reply ? message : null
+      if (result.anchor) toast('沙箱不支持选图指令（anchor），已把指令填入输入框')
+      else toast(result.reply ? '已填入指令并引用本条消息，按 Enter 发送' : '已填入指令，按 Enter 发送')
+      await nextTick()
+      composerInput.value?.focus()
+      return
+    }
+    if (result.kind === 'command') {
+      toast('指令已发送')
+      await loadMessages(activeConversationId.value)
+      await refreshWorld()
+      await refreshStatus()
+      return
+    }
     await loadMessages(activeConversationId.value)
     await refreshWorld()
     await refreshStatus()
   } catch (error) {
     toast(error instanceof Error ? error.message : String(error))
   }
+}
+
+function onBubbleClick(event: MouseEvent) {
+  const target = event.target as HTMLElement | null
+  if (target?.tagName !== 'IMG') return
+  event.preventDefault()
+  const src = (target as HTMLImageElement).src
+  if (src) viewerUrl.value = src
 }
 
 function msgTag(message: any): string {
@@ -558,8 +623,15 @@ function attachments(message: any): any[] {
 }
 
 function isImage(att: any): boolean {
-  const mime = att.content_type || ''
-  return mime.startsWith('image/')
+  return (att.content_type || '').startsWith('image/')
+}
+
+function isVideo(att: any): boolean {
+  return (att.content_type || '').startsWith('video/')
+}
+
+function isAudio(att: any): boolean {
+  return (att.content_type || '').startsWith('audio/')
 }
 </script>
 
@@ -631,8 +703,17 @@ function isImage(att: any): boolean {
               <span v-if="msgTag(message)" class="tag">{{ msgTag(message) }}</span>
               <span v-if="message.recalled_at" class="tag err">已撤回</span>
             </div>
-            <div class="msg-bubble" :style="message.recalled_at ? 'opacity: .55; text-decoration: line-through' : ''">
-              {{ renderText(message) }}
+            <div
+              class="msg-bubble"
+              :style="message.recalled_at ? 'opacity: .55; text-decoration: line-through' : ''"
+              @click="onBubbleClick"
+            >
+              <div
+                v-if="markdownSource(message)"
+                class="msg-text markdown-body"
+                v-html="markdownHtml(message)"
+              ></div>
+              <div v-else-if="renderText(message)" class="msg-text plain-text">{{ renderText(message) }}</div>
               <div v-if="keyboardButtons(message).length" class="keyboard-row">
                 <button
                   v-for="button in keyboardButtons(message)"
@@ -640,16 +721,29 @@ function isImage(att: any): boolean {
                   type="button"
                   class="keyboard-btn"
                   :class="{ 'keyboard-disabled': message.recalled_at }"
-                  :title="button.data"
+                  :title="buttonHint(button)"
                   :disabled="!!message.recalled_at"
                   @click="clickButton(message, button)"
                 >
                   {{ button.label }}
                 </button>
               </div>
-              <div v-for="att in attachments(message)" :key="att.id || att.url" style="margin-top: 6px">
-                <img v-if="isImage(att) && att.url" :src="att.url" style="max-width: 240px; border-radius: 8px" alt="" />
-                <a v-else-if="att.url" :href="att.url" target="_blank" class="small mono">{{ att.filename || att.url }}</a>
+              <div v-if="attachments(message).length" class="msg-attachments">
+                <template v-for="att in attachments(message)" :key="att.id || att.url">
+                  <img
+                    v-if="isImage(att) && att.url"
+                    class="msg-image"
+                    :src="att.url"
+                    :alt="att.filename || '图片'"
+                    loading="lazy"
+                    title="点击查看大图"
+                  />
+                  <video v-else-if="isVideo(att) && att.url" class="msg-video" :src="att.url" controls></video>
+                  <audio v-else-if="isAudio(att) && att.url" :src="att.url" controls></audio>
+                  <a v-else-if="att.url" :href="att.url" target="_blank" rel="noopener" class="small mono">
+                    {{ att.filename || att.url }}
+                  </a>
+                </template>
               </div>
             </div>
             <div class="msg-meta">
@@ -701,6 +795,7 @@ function isImage(att: any): boolean {
           <input ref="fileInput" type="file" accept="image/*" multiple style="display: none" @change="onFilePicked" />
           <button class="btn small" :disabled="!canSend || uploading" title="上传图片" @click="pickFiles">🖼</button>
           <textarea
+            ref="composerInput"
             v-model="text"
             class="textarea"
             :placeholder="dmTarget ? '私聊消息，Enter 发送；可粘贴/拖入图片' : '群消息，Enter 发送；可粘贴/拖入图片'"
@@ -819,6 +914,11 @@ function isImage(att: any): boolean {
   </div>
 
   <div v-if="hud" class="hud">{{ hud }}</div>
+
+  <div v-if="viewerUrl" class="lightbox" @click.self="viewerUrl = ''">
+    <img :src="viewerUrl" alt="图片预览" />
+    <button class="btn small lightbox-close" @click="viewerUrl = ''">关闭</button>
+  </div>
 
   <div v-if="newGroupModal" class="modal-mask" @click.self="newGroupModal = false">
     <div class="modal">

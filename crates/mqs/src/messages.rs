@@ -829,8 +829,10 @@ impl World {
             return Err(invalid_param("keyboard button index out of range"));
         }
         let button = &buttons[index as usize];
-        let data = button["action"]["data"].as_str().unwrap_or("").to_string();
-        let kind = button["action"]["type"].as_i64().unwrap_or(1);
+        let action = &button["action"];
+        let data = action["data"].as_str().unwrap_or("").to_string();
+        // Official ButtonAction.type: 0 = link, 1 = callback, 2 = command.
+        let kind = action["type"].as_i64().unwrap_or(1);
         let conversation_id = s(&row, "conversation_id");
         let bot_id = s(&row, "bot_id");
         if self
@@ -844,54 +846,108 @@ impl World {
             return Ok(json!({"kind": "link", "data": data, "message": null}));
         }
         if kind == 2 {
-            let bot = self.bot_out(&self.bot_by_id(&bot_id)?);
-            let interaction = self
-                .emit_button_interaction(
-                    &bot,
-                    &bot_id,
-                    user_id,
-                    &conversation_id,
-                    message_id,
+            return self
+                .click_command_button(
                     button,
+                    user_id,
+                    message_id,
+                    &conversation_id,
+                    &bot_id,
                     &data,
-                    index,
                 )
-                .await?;
+                .await;
+        }
+        let bot = self.bot_out(&self.bot_by_id(&bot_id)?);
+        let interaction = self
+            .emit_button_interaction(
+                &bot,
+                &bot_id,
+                user_id,
+                &conversation_id,
+                message_id,
+                button,
+                &data,
+                index,
+            )
+            .await?;
+        Ok(json!({
+            "kind": "callback",
+            "data": data,
+            "interaction": interaction,
+            "message": null,
+        }))
+    }
+
+    /// Clicking a command button either sends the command right away
+    /// (`action.enter=true`) or leaves it in the composer for the user to
+    /// submit (`action.enter=false`, the official default).  In groups the
+    /// command is addressed to the bot that owns the button, which is what a
+    /// real QQ client inserts as `@bot` text.
+    async fn click_command_button(
+        &self,
+        button: &Value,
+        user_id: &str,
+        message_id: &str,
+        conversation_id: &str,
+        bot_id: &str,
+        data: &str,
+    ) -> MqsResult<Value> {
+        let action = &button["action"];
+        let enter = action["enter"].as_bool().unwrap_or(false);
+        let reply = action["reply"].as_bool().unwrap_or(false);
+        let anchor = action["anchor"].as_i64();
+        let unsupport_tips = action["unsupport_tips"].as_str().unwrap_or("");
+        let is_group = conversation_id.starts_with("group:");
+        let mut at_bots: Vec<String> = Vec::new();
+        if is_group {
+            at_bots.push(bot_id.to_string());
+        }
+        // anchor=1 opens the mobile image picker and ignores `enter`.  The
+        // sandbox has no picker, so it behaves like a normal command button.
+        if !enter || anchor == Some(1) {
             return Ok(json!({
-                "kind": "callback",
+                "kind": "command",
+                "enter": enter,
+                "reply": reply,
+                "anchor": anchor,
                 "data": data,
-                "interaction": interaction,
+                "at_bots": at_bots,
+                "unsupport_tips": unsupport_tips,
                 "message": null,
             }));
         }
-        let is_group = conversation_id.starts_with("group:");
-        let no_mentions: Vec<String> = Vec::new();
-        let implicit = [bot_id.clone()];
+        let reply_to = if reply {
+            Some(message_id.to_string())
+        } else {
+            None
+        };
+        let mentions: Vec<String> = Vec::new();
         let result = self
             .send_as_user(
-                &conversation_id,
+                conversation_id,
                 user_id,
-                &data,
+                data,
                 0,
-                &[],
-                if is_group {
-                    Some(&no_mentions[..])
-                } else {
-                    None
-                },
-                if is_group { Some(&implicit[..]) } else { None },
-                None,
+                &mentions,
+                if is_group { Some(&at_bots[..]) } else { None },
+                if is_group { Some(&at_bots[..]) } else { None },
+                reply_to.as_deref(),
                 &[],
             )
             .await?;
         let mut out = Map::new();
-        out.insert("kind".into(), Value::String("command".into()));
-        out.insert("data".into(), Value::String(data));
         if let Some(obj) = result.as_object() {
             for (key, value) in obj {
                 out.insert(key.clone(), value.clone());
             }
         }
+        out.insert("kind".into(), Value::String("command".into()));
+        out.insert("enter".into(), Value::Bool(true));
+        out.insert("reply".into(), Value::Bool(reply));
+        out.insert("anchor".into(), Value::from(anchor));
+        out.insert("data".into(), Value::String(data.to_string()));
+        out.insert("at_bots".into(), json!(at_bots));
+        out.insert("unsupport_tips".into(), Value::from(unsupport_tips));
         Ok(Value::Object(out))
     }
 

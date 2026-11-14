@@ -365,7 +365,7 @@ async fn markdown_message_is_kept() {
 }
 
 #[tokio::test]
-async fn keyboard_click_command_and_callback() {
+async fn keyboard_click_link_callback_and_command() {
     let test = Test::start().await;
     test.settings(json!({"require_online": false})).await;
     let user = test.user_id().await;
@@ -375,10 +375,14 @@ async fn keyboard_click_command_and_callback() {
     let message = last_inbound(&test, &conversation).await;
     let openid = test.group_openid("10000", &group).await;
     let token = test.token("10000").await;
+    // Official action.type: 0 = link, 1 = callback, 2 = command.
     let keyboard = json!({"content": {"rows": [
         {"buttons": [
-            {"id": "1", "action": {"type": 1, "data": "/help", "unsupported_tips": ""}},
-            {"id": "2", "action": {"type": 2, "data": "cb", "unsupported_tips": ""}},
+            {"id": "cb", "action": {"type": 1, "data": "cb", "unsupport_tips": ""}},
+            {"id": "link", "action": {"type": 0, "data": "https://example.com/docs", "unsupport_tips": ""}},
+            {"id": "fill", "action": {"type": 2, "data": "/help", "unsupport_tips": ""}},
+            {"id": "run", "action": {"type": 2, "data": "/status", "enter": true, "unsupport_tips": ""}},
+            {"id": "quote", "action": {"type": 2, "data": "/quote", "enter": true, "reply": true, "unsupport_tips": ""}},
         ]}
     ]}});
     let response = test
@@ -392,22 +396,12 @@ async fn keyboard_click_command_and_callback() {
     let sent: Value = response.json().await.unwrap();
     let message_id = sent["id"].as_str().unwrap().to_string();
 
-    let (status, clicked) = test
-        .ctl(
-            "POST",
-            &format!("/_mqs/messages/{message_id}/click"),
-            Some(json!({"user_id": user, "index": 0})),
-        )
-        .await;
-    assert_eq!(status, 200, "{clicked}");
-    assert_eq!(clicked["kind"], "command");
-    assert_eq!(clicked["data"], "/help");
-
+    // type 1 -> INTERACTION_CREATE
     let (status, callback) = test
         .ctl(
             "POST",
             &format!("/_mqs/messages/{message_id}/click"),
-            Some(json!({"user_id": user, "index": 1})),
+            Some(json!({"user_id": user, "index": 0})),
         )
         .await;
     assert_eq!(status, 200, "{callback}");
@@ -424,6 +418,83 @@ async fn keyboard_click_command_and_callback() {
         .await
         .unwrap();
     assert_eq!(response.status().as_u16(), 200);
+
+    // type 0 -> the client opens the URL itself
+    let (status, link) = test
+        .ctl(
+            "POST",
+            &format!("/_mqs/messages/{message_id}/click"),
+            Some(json!({"user_id": user, "index": 1})),
+        )
+        .await;
+    assert_eq!(status, 200, "{link}");
+    assert_eq!(link["kind"], "link");
+    assert_eq!(link["data"], "https://example.com/docs");
+
+    // type 2 without enter (the official default) only fills the composer:
+    // nothing is sent, and the client is told which bot to @.
+    let (status, filled) = test
+        .ctl(
+            "POST",
+            &format!("/_mqs/messages/{message_id}/click"),
+            Some(json!({"user_id": user, "index": 2})),
+        )
+        .await;
+    assert_eq!(status, 200, "{filled}");
+    assert_eq!(filled["kind"], "command");
+    assert_eq!(filled["enter"], false);
+    assert_eq!(filled["data"], "/help");
+    assert_eq!(filled["at_bots"], json!(["10000"]));
+    assert!(filled["message"].is_null());
+    let sent_help = test
+        .world()
+        .list_messages(&conversation, 50, None)
+        .unwrap()
+        .into_iter()
+        .any(|m| m["direction"] == "in" && m["content"] == "/help");
+    assert!(!sent_help, "enter=false must not send the command");
+
+    // type 2 + enter -> send immediately, @ the bot that owns the button.
+    let (status, ran) = test
+        .ctl(
+            "POST",
+            &format!("/_mqs/messages/{message_id}/click"),
+            Some(json!({"user_id": user, "index": 3})),
+        )
+        .await;
+    assert_eq!(status, 200, "{ran}");
+    assert_eq!(ran["kind"], "command");
+    assert_eq!(ran["enter"], true);
+    assert_eq!(ran["message"]["content"], "/status");
+    assert_eq!(ran["message"]["raw"]["at_bots"], json!(["10000"]));
+
+    // type 2 + enter + reply -> the sent command quotes the button message.
+    let (status, quoted) = test
+        .ctl(
+            "POST",
+            &format!("/_mqs/messages/{message_id}/click"),
+            Some(json!({"user_id": user, "index": 4})),
+        )
+        .await;
+    assert_eq!(status, 200, "{quoted}");
+    assert_eq!(quoted["kind"], "command");
+    let events = test
+        .world()
+        .list_events(0, 500, Some(&conversation))
+        .unwrap();
+    let event = events
+        .iter()
+        .find(|event| {
+            event["payload"]["content"]
+                .as_str()
+                .map(|content| content.contains("/quote"))
+                .unwrap_or(false)
+        })
+        .expect("the command event should be delivered");
+    assert_eq!(
+        event["payload"]["message_reference"]["message_id"],
+        message_id
+    );
 }
 
 #[tokio::test]
@@ -481,7 +552,7 @@ async fn event_id_replies_are_passive_not_active() {
     let token = test.token("10000").await;
     // a callback button message, then a click => INTERACTION_CREATE event
     let keyboard = json!({"content": {"rows": [{"buttons": [
-        {"id": "1", "action": {"type": 2, "data": "cb", "unsupported_tips": ""}}
+        {"id": "1", "action": {"type": 1, "data": "cb", "unsupported_tips": ""}}
     ]}]}});
     let sent: Value = test
         .http()
