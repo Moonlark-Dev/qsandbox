@@ -33,6 +33,19 @@ const QQ_TAG_RE =
   /<qqbot-(at-user|at-everyone|cmd-enter|cmd-input)((?:\s+[A-Za-z][A-Za-z0-9-]*\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*\/?>/g
 const QQ_ATTR_RE = /([A-Za-z][A-Za-z0-9-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
 
+// The QQ client's Markdown renderer treats `\(…\)` as an inline formula
+// delimiter (see Moonlark-Dev/Moonlark#1556: escaping `回声洞 —— (1234)` to
+// `回声洞 —— \(1234\)` makes the client show a formula instead of the text).
+// The GUI mirrors the delimiters so a Bot message looks like the real client,
+// but it does not typeset TeX (this renderer stays dependency-free): the
+// source is escaped and shown in a math-styled span, with the TeX in the
+// tooltip.  `markdownPlain` drops the delimiters for list previews.
+const INLINE_MATH_RE = /\\\(([^\n]*?)\\\)/g
+
+function renderInlineMath(tex: string): string {
+  return `<span class="qq-math" data-qq-math="${escapeHtml(tex)}" title="${escapeHtml(`公式：\\(${tex}\\)`)}">${escapeHtml(tex)}</span>`
+}
+
 function tagAttributes(source: string): Record<string, string> {
   const attrs: Record<string, string> = {}
   let match: RegExpExecArray | null
@@ -108,6 +121,9 @@ function renderInline(source: string, options: MarkdownOptions): string {
     const html = renderQqTag(name, attrs, options)
     return html ? keep(html) : match
   })
+  // `\(…\)` is an inline formula for the real QQ client; pull it out before
+  // escaping so the TeX source is never treated as Markdown/HTML.
+  text = text.replace(INLINE_MATH_RE, (_, tex: string) => keep(renderInlineMath(tex)))
   text = escapeHtml(text)
 
   text = text.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (match, alt: string, url: string) => {
@@ -278,6 +294,7 @@ export function markdownPlain(source: string, options: MarkdownOptions = {}): st
     .replace(/`([^`]+)`/g, '$1')
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/^>\s?/gm, '')
+    .replace(INLINE_MATH_RE, '$1')
     .replace(/^\s*([-+*]|\d+[.)])\s+/gm, '')
     .replace(/[*_~]{1,3}([^*_~\n]+)[*_~]{1,3}/g, '$1')
     .replace(/\|/g, ' ')

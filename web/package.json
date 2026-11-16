@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "vue-tsc --noEmit"
+    "typecheck": "vue-tsc --noEmit",
+    "test": "node --experimental-strip-types --test test/markdown.test.ts"
   },
   "dependencies": {
     "vue": "^3.5.13"
