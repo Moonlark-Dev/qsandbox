@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::Test;
+use common::{next_json, Test};
 use serde_json::{json, Value};
 
 async fn whitelist(test: &Test) {
@@ -33,6 +33,8 @@ async fn group_info_and_bot_state() {
         .unwrap();
     assert_eq!(info["group_openid"], openid);
     assert!(info["group_member_num"].as_i64().unwrap() >= 4);
+    // 2026-11-16: 群基本信息补 union_group_openid（跨应用群标识）
+    assert_eq!(info["union_group_openid"].as_str().unwrap().len(), 32);
 
     let state: Value = test
         .http()
@@ -351,5 +353,64 @@ async fn group_add_remove_robot_events() {
         .filter_map(|event| event["type"].as_str().map(str::to_string))
         .collect();
     assert!(types.contains(&"GROUP_ADD_ROBOT".to_string()), "{types:?}");
+    let added = events
+        .iter()
+        .find(|event| event["type"] == "GROUP_ADD_ROBOT")
+        .unwrap();
+    // 官方把机器人进群/退群事件的 timestamp 定义为 Unix 秒整数，并带 union_group_openid
+    assert!(
+        added["payload"]["timestamp"].is_i64(),
+        "timestamp must be unix seconds: {}",
+        added["payload"]
+    );
+    assert_eq!(
+        added["payload"]["union_group_openid"]
+            .as_str()
+            .unwrap()
+            .len(),
+        32
+    );
+    ws.close(None).await.ok();
+}
+
+#[tokio::test]
+async fn group_member_add_remove_events() {
+    let test = Test::start().await;
+    let (mut ws, _ready, _token) = test.connect_gateway("10000", 1 << 24).await;
+    let group = test.group_id().await;
+    let created = test
+        .ctl_ok("POST", "/_mqs/users", Some(json!({"nickname": "新人"})))
+        .await;
+    let user = created["id"].as_str().unwrap().to_string();
+    test.ctl_ok(
+        "POST",
+        &format!("/_mqs/groups/{group}/members"),
+        Some(json!({"user_id": user})),
+    )
+    .await;
+
+    let frame = next_json(&mut ws).await;
+    assert_eq!(frame["t"], "GROUP_MEMBER_ADD");
+    let payload = &frame["d"];
+    assert_eq!(payload["group_openid"].as_str().unwrap().len(), 32);
+    assert_eq!(payload["member_openid"].as_str().unwrap().len(), 32);
+    assert_eq!(payload["union_group_openid"].as_str().unwrap().len(), 32);
+    assert!(payload["timestamp"].is_i64());
+    assert!(
+        payload.get("user_openid").is_none(),
+        "加入事件没有 user_openid"
+    );
+
+    test.ctl_ok(
+        "DELETE",
+        &format!("/_mqs/groups/{group}/members/{user}"),
+        None,
+    )
+    .await;
+    let frame = next_json(&mut ws).await;
+    assert_eq!(frame["t"], "GROUP_MEMBER_REMOVE");
+    let payload = &frame["d"];
+    assert_eq!(payload["member_openid"], payload["user_openid"]);
+    assert_eq!(payload["union_group_openid"].as_str().unwrap().len(), 32);
     ws.close(None).await.ok();
 }

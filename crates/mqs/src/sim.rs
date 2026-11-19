@@ -866,6 +866,23 @@ async fn group_member_detail(
     Ok(attach_rate(Json(detail).into_response(), &info))
 }
 
+// ------------------------------------------------------------------ users
+async fn user_info(
+    State(state): State<Arc<AppState>>,
+    Path(openid): Path<String>,
+    BotCtx(bot): BotCtx,
+) -> MqsResult<Response> {
+    let bot_id = bot["id"].as_str().unwrap_or("");
+    let rate = state
+        .world
+        .rate
+        .lock()
+        .unwrap()
+        .check_read(bot_id, "user_info", 10, 1_000)?;
+    let body = state.world.user_basic_info(bot_id, &openid)?;
+    Ok(attach_rate(Json(body).into_response(), &rate))
+}
+
 // ------------------------------------------------------------------ webhook / ws
 async fn webhook_entry(
     State(state): State<Arc<AppState>>,
@@ -918,6 +935,7 @@ pub fn sim_router(state: Arc<AppState>) -> Router {
         .route("/gateway", get(gateway_url))
         .route("/gateway/bot", get(gateway_bot))
         .route("/users/@me", get(bot_me))
+        .route("/v2/users/{openid}/info", get(user_info))
         .route(
             "/v2/groups/{group_openid}/messages",
             post(send_group_message),
@@ -1012,6 +1030,7 @@ pub const ROUTE_TABLE: &[(&str, &str)] = &[
     ("GET", "/gateway"),
     ("GET", "/gateway/bot"),
     ("GET", "/users/@me"),
+    ("GET", "/v2/users/{openid}/info"),
     ("POST", "/v2/groups/{group_openid}/messages"),
     ("DELETE", "/v2/groups/{group_openid}/messages/{message_id}"),
     ("POST", "/v2/users/{openid}/messages"),

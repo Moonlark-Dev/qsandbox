@@ -36,6 +36,7 @@ impl World {
             .unwrap();
         Ok(json!({
             "group_openid": self.openid(bot_id, "group", group_id)?,
+            "union_group_openid": union_openid_for(group_id),
             "group_name": group["name"],
             "group_finger_memo": s(&row, "finger_memo"),
             "group_class_text": s(&row, "class_text"),
@@ -296,6 +297,7 @@ impl World {
                 "DELETE FROM group_members WHERE group_id=? AND user_id=?",
                 &p![group_id, &user_id],
             )?;
+            self.emit_group_member_event(group_id, &user_id, "GROUP_MEMBER_REMOVE")?;
             if add_blacklist {
                 self.db.execute(
                     "INSERT INTO group_blacklist(group_id,user_id,banned_at) VALUES(?,?,?) \
@@ -449,6 +451,13 @@ impl World {
         let row = row.ok_or_else(|| invalid_param("pending join request not found"))?;
         let now = self.clock.now_ms();
         if op == "approve" {
+            let existed = self
+                .db
+                .one(
+                    "SELECT 1 FROM group_members WHERE group_id=? AND user_id=?",
+                    &p![group_id, &user_id],
+                )?
+                .is_some();
             self.db.execute(
                 "INSERT INTO group_members(group_id,user_id,role,joined_at) VALUES(?,?,?,?) \
                  ON CONFLICT(group_id,user_id) DO NOTHING",
@@ -458,6 +467,9 @@ impl World {
                 "UPDATE group_join_requests SET status='approved', decided_at=? WHERE id=?",
                 &p![now, s(&row, "id")],
             )?;
+            if !existed {
+                self.emit_group_member_event(group_id, &user_id, "GROUP_MEMBER_ADD")?;
+            }
         } else {
             self.db.execute(
                 "UPDATE group_join_requests SET status='declined', decided_at=?, reject_reason=? WHERE id=?",

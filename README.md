@@ -90,9 +90,10 @@ mqs mcp                                 # stdio MCP server（10 个工具）
 | **鉴权** | `getAppAccessToken`、`Authorization: QQBot <token>`、7200s 过期（受虚拟时钟控制）、11241/11242/11243/11244 |
 | **网关** | hello / identify / ready / heartbeat / resume / invalid session、intents、分片、断线补发、4002/4004/4006/4009/4010 |
 | **群 / C2C 消息** | 文本、markdown（含 @ 用户 / 指令标签）、keyboard（指令/回调/链接）、ark、embed、媒体、引用、撤回、`msg_id+msg_seq` 去重、被动窗口与次数 |
-| **群消息语义** | 全量消息（`GROUP_MESSAGE_CREATE` + `mentions[].is_you`）与仅 @（`GROUP_AT_MESSAGE_CREATE` + `<@!openid>` 前缀）两套事件，按群内 Bot 的 `recv_msg_setting` 切换；`at_bots` 显式投递 |
-| **群管理** | 群信息、机器人群内状态、成员禁言、黑名单、批量移除、入群申请审批（内邀白名单 11253） |
+| **群消息语义** | 全量消息（`GROUP_MESSAGE_CREATE` + `mentions[].is_you`）与仅 @（`GROUP_AT_MESSAGE_CREATE` + `<@!openid>` 前缀）两套事件，按群内 Bot 的 `recv_msg_setting` 切换；`at_bots` 显式投递；事件带 `author.avatar` / `member_nickname` / `union_group_openid` |
+| **群管理** | 群信息（含 `union_group_openid`）、机器人群内状态、成员禁言、黑名单、批量移除、入群申请审批（内邀白名单 11253）、群成员增减事件（`GROUP_MEMBER_ADD`/`GROUP_MEMBER_REMOVE`，intent `1<<24`） |
 | **群成员** | 成员列表 / 单人信息（白名单接口，60/30 QPM，游标分页） |
+| **用户资料** | `GET /v2/users/{openid}/info`：昵称、头像、`union_openid`、主动消息开关（10 QPS，未知 openid 返回 40184001） |
 | **主动消息** | Bot 级 + 群级开关；未认证/已认证两档滑动窗口限流；单关系 20/min；每日 1000 条配额（40055） |
 | **媒体** | `file_type` 1/2/3、url / multipart / base64 / 分片上传（prepare → part → finish）、内容哈希寻址下载 |
 | **事件投递** | WebSocket 与 Webhook 双通道、Ed25519 握手与签名、事件溯源（RESUME 补发） |

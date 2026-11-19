@@ -1,13 +1,13 @@
 # QSandbox 接口覆盖率
 
-> 自动生成 · 文档快照 2026-11-09 · 请勿手改
+> 自动生成 · 文档快照 2026-11-19 · 请勿手改
 
-**29 endpoints — 29 implemented, 0 stubs, 0 n/a**
+**30 endpoints — 30 implemented, 0 stubs, 0 n/a**
 
 | 层级 | 总数 | full | partial | stub | n/a |
 |---|---|---|---|---|---|
 | L0 | 6 | 6 | 0 | 0 | 0 |
-| L1 | 11 | 9 | 2 | 0 | 0 |
+| L1 | 12 | 10 | 2 | 0 | 0 |
 | L2 | 9 | 9 | 0 | 0 | 0 |
 | L3 | 3 | 2 | 1 | 0 | 0 |
 
@@ -29,6 +29,7 @@
 | `PUT` | `/v2/interactions/{interaction_id}` | full | Bot Token | L1 | 确认按钮回调结果（code 0 成功） |
 | `PUT` | `/v2/uploads/{upload_id}/parts/{index}` | full | 无 | L1 | 富媒体分片上传：上传分片（预签名 URL） |
 | `POST` | `/v2/users/{openid}/files` | full | Bot Token | L1 | 上传单聊富媒体文件 |
+| `GET` | `/v2/users/{openid}/info` | full | Bot Token | L1 | 获取用户基本信息（昵称、头像、union_openid） |
 | `DELETE` | `/v2/users/{openid}/messages/{message_id}` | partial | Bot Token | L1 | 撤回单聊消息 |
 | `POST` | `/v2/users/{openid}/upload_part_finish` | full | Bot Token | L1 | 单聊富媒体分片上传：完成分片 |
 | `POST` | `/v2/users/{openid}/upload_prepare` | full | Bot Token | L1 | 单聊富媒体分片上传：预上传 |

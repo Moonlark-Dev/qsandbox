@@ -278,6 +278,19 @@ impl World {
         format!("/avatars/{entity_id}.svg?label={encoded}&kind={kind}")
     }
 
+    /// 把内部保存的相对资源路径（头像、媒体）变成 SDK 能直接下载的绝对 URL。
+    pub fn absolute(&self, path: &str) -> String {
+        if path.is_empty() || path.starts_with("http://") || path.starts_with("https://") {
+            return path.to_string();
+        }
+        let base = self.sim_base.read().unwrap().clone();
+        if base.is_empty() {
+            path.to_string()
+        } else {
+            format!("{}{}", base.trim_end_matches('/'), path)
+        }
+    }
+
     pub fn user_out(&self, row: &Row) -> Value {
         let mut data = row.clone();
         let kind = if s(row, "actor_type") == "npc" {
@@ -492,6 +505,32 @@ impl World {
             .one("SELECT * FROM users WHERE id=?", &p![user_id])?
             .ok_or_else(|| invalid_param(format!("user not found: {user_id}")))?;
         Ok(self.user_out(&row))
+    }
+
+    /// `GET /v2/users/{openid}/info`：官方返回 union_openid / username / avatar /
+    /// allow_proactive_msg，沙箱没有用户级主动推送偏好，这里反映 Bot 侧的主动消息开关
+    /// （也就是 send_as_bot 真正会校验的那个值）。
+    pub fn user_basic_info(&self, bot_id: &str, user_openid: &str) -> MqsResult<Value> {
+        let bot = self.bot_by_id(bot_id)?;
+        let mapping = self
+            .resolve_openid(bot_id, user_openid)
+            .map_err(|_| crate::error::no_friend_relation())?;
+        if s(&mapping, "kind") != "user" {
+            return Err(invalid_param("openid is not a user openid"));
+        }
+        let row = self
+            .db
+            .one(
+                "SELECT * FROM users WHERE id=?",
+                &p![s(&mapping, "entity_id")],
+            )?
+            .ok_or_else(crate::error::no_friend_relation)?;
+        Ok(json!({
+            "union_openid": union_openid_for(&s(&row, "id")),
+            "username": s(&row, "nickname"),
+            "avatar": self.absolute(&s(&row, "avatar")),
+            "allow_proactive_msg": b(&bot, "allow_proactive_msg"),
+        }))
     }
 
     pub fn update_user(&self, user_id: &str, patch: &Map<String, Value>) -> MqsResult<Value> {
@@ -972,6 +1011,13 @@ impl World {
         self.get_group(group_id)?;
         self.get_user(user_id)?;
         let now = self.clock.now_ms();
+        let existed = self
+            .db
+            .one(
+                "SELECT 1 FROM group_members WHERE group_id=? AND user_id=?",
+                &p![group_id, user_id],
+            )?
+            .is_some();
         self.db.tx(|conn| {
             if role == "owner" {
                 conn_exec(
@@ -988,6 +1034,9 @@ impl World {
             )?;
             Ok(())
         })?;
+        if !existed {
+            self.emit_group_member_event(group_id, user_id, "GROUP_MEMBER_ADD")?;
+        }
         let members = self.list_members(group_id)?;
         Ok(members.last().cloned().unwrap_or(Value::Null))
     }
@@ -1029,10 +1078,20 @@ impl World {
     }
 
     pub fn remove_member(&self, group_id: &str, user_id: &str) -> MqsResult<()> {
+        let removed = self
+            .db
+            .one(
+                "SELECT 1 FROM group_members WHERE group_id=? AND user_id=?",
+                &p![group_id, user_id],
+            )?
+            .is_some();
         self.db.execute(
             "DELETE FROM group_members WHERE group_id=? AND user_id=?",
             &p![group_id, user_id],
         )?;
+        if removed {
+            self.emit_group_member_event(group_id, user_id, "GROUP_MEMBER_REMOVE")?;
+        }
         Ok(())
     }
 
@@ -1407,9 +1466,10 @@ impl World {
             self.openid(bot_id, "user", &op_id)?
         };
         let payload = json!({
-            "timestamp": self.clock.iso(None),
+            "timestamp": self.clock.now_ms() / 1000,
             "group_openid": group_openid,
             "op_member_openid": op_openid,
+            "union_group_openid": union_openid_for(group_id),
         });
         let event_id = new_event_id();
         let conversation_id = format!("group:{group_id}");
@@ -1438,6 +1498,69 @@ impl World {
         Ok(Some(
             json!({"event_id": event_id, "seq": seq, "payload": payload}),
         ))
+    }
+
+    /// GROUP_MEMBER_ADD / GROUP_MEMBER_REMOVE：群成员增减，官方 intent `1<<24`。
+    /// 每个在群里的 Bot 各收到一条（openid 按 Bot 隔离）。
+    pub fn emit_group_member_event(
+        &self,
+        group_id: &str,
+        user_id: &str,
+        event_type: &str,
+    ) -> MqsResult<()> {
+        if self
+            .db
+            .one("SELECT 1 FROM groups WHERE id=?", &p![group_id])?
+            .is_none()
+        {
+            return Ok(());
+        }
+        let bots = self.db.all(
+            "SELECT bot_id FROM group_bots WHERE group_id=? ORDER BY bot_id",
+            &p![group_id],
+        )?;
+        let conversation_id = format!("group:{group_id}");
+        self.ensure_conversation(&conversation_id)?;
+        for row in bots {
+            let bot_id = s(&row, "bot_id");
+            let Ok(bot) = self.bot_by_id(&bot_id) else {
+                continue;
+            };
+            let group_openid = self.openid(&bot_id, "group", group_id)?;
+            let member_openid = self.openid(&bot_id, "user", user_id)?;
+            let mut payload = json!({
+                "timestamp": self.clock.now_ms() / 1000,
+                "group_openid": group_openid,
+                "member_openid": member_openid,
+                "union_group_openid": union_openid_for(group_id),
+            });
+            if event_type == "GROUP_MEMBER_REMOVE" {
+                payload["user_openid"] = Value::String(member_openid);
+            }
+            let event_id = new_event_id();
+            let seq = self.db.execute(
+                "INSERT INTO events(event_id,type,payload_json,conversation_id,target_bot_id,created_at) \
+                 VALUES(?,?,?,?,?,?)",
+                &p![
+                    &event_id,
+                    event_type,
+                    payload.to_string(),
+                    &conversation_id,
+                    &bot_id,
+                    self.clock.now_ms()
+                ],
+            )? as i64;
+            self.spawn_deliver(
+                &bot_id,
+                seq,
+                event_type,
+                &event_id,
+                &payload,
+                &self.bot_out(&bot),
+                Some(&conversation_id),
+            );
+        }
+        Ok(())
     }
 
     // ------------------------------------------------------------------ rules

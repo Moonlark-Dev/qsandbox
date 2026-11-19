@@ -38,6 +38,8 @@ pub fn intent_for(event_type: &str) -> Option<i64> {
         | "GROUP_MSG_REJECT"
         | "GROUP_MSG_RECEIVE" => 1 << 25,
         "INTERACTION_CREATE" => 1 << 26,
+        // 群成员增减：官方事件页写的是 GROUP_MEMBER_EVENT (1<<24)。
+        "GROUP_MEMBER_ADD" | "GROUP_MEMBER_REMOVE" => 1 << 24,
         _ => return None,
     })
 }

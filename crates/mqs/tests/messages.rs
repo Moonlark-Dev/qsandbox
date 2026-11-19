@@ -29,6 +29,16 @@ async fn user_message_reaches_bot_with_mention() {
     assert_eq!(payload["group_id"], test.group_id().await);
     assert_eq!(payload["author"]["member_openid"], payload["author"]["id"]);
     assert_eq!(payload["group_openid"].as_str().unwrap().len(), 32);
+    // 2026-11-16: 群消息事件补 member_nickname / avatar / union_group_openid
+    assert_eq!(
+        payload["author"]["member_nickname"],
+        payload["author"]["username"]
+    );
+    assert!(payload["author"]["avatar"]
+        .as_str()
+        .unwrap()
+        .starts_with(&format!("{}/avatars/", test.sim)));
+    assert_eq!(payload["union_group_openid"].as_str().unwrap().len(), 32);
     let self_mention = payload["mentions"]
         .as_array()
         .unwrap()
@@ -36,7 +46,34 @@ async fn user_message_reaches_bot_with_mention() {
         .find(|mention| mention["bot"] == true)
         .expect("self mention");
     assert_eq!(self_mention["is_you"], true);
+    assert!(self_mention["member_nickname"].is_string());
     ws.close(None).await.ok();
+}
+
+#[tokio::test]
+async fn c2c_event_author_carries_username_and_avatar() {
+    let test = Test::start().await;
+    let user = test.user_id().await;
+    let conversation = format!("dm:10000:{user}");
+    test.ctl_ok(
+        "POST",
+        "/_mqs/chat/send",
+        Some(json!({"as_user": user, "to": conversation, "content": "hi bot"})),
+    )
+    .await;
+    let events = test.world().list_events(0, 50, None).unwrap();
+    let event = events
+        .iter()
+        .find(|event| event["type"] == "C2C_MESSAGE_CREATE")
+        .expect("c2c event");
+    let author = &event["payload"]["author"];
+    // 2026-11-16: 单聊事件下发发送者昵称与头像
+    assert!(!author["username"].as_str().unwrap().is_empty());
+    assert!(author["avatar"]
+        .as_str()
+        .unwrap()
+        .starts_with(&format!("{}/avatars/", test.sim)));
+    assert!(author["member_nickname"].is_null(), "单聊没有群昵称");
 }
 
 #[tokio::test]

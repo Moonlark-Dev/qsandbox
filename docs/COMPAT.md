@@ -1,6 +1,6 @@
 # SDK 兼容性与已知差异
 
-> 文档快照：2026-11-09 · 对应 QSandbox v0.3（Rust + Tauri）
+> 文档快照：2026-11-19 · 对应 QSandbox v0.4（Rust + Tauri）
 
 ## 已实测
 
@@ -57,6 +57,13 @@ import mqs.compat.botpy   # 必须在创建 botpy.Client 之前 import
 | 13 | `INTERACTION_CREATE.chat_type`：群=1、单聊=2（官方 0=频道） | 频道不在本产品内 | 与官方数值一致 |
 | 14 | Markdown 文本交互标签（`<qqbot-at-user>`/`<qqbot-at-everyone>`/`<qqbot-cmd-*>`）由 GUI 模拟：`at_users` 是控制 API 返回的额外字段，点击指令走 `POST /_mqs/messages/{id}/cmd` | 直接断言 REST 事件的 `mentions` 不会因 Markdown 标签自动补齐；标签只在 GUI 里可见/可点 | 官方由客户端解析并渲染；沙箱把 openid→昵称放进 `at_users`，推送语义（群里 @Bot、`reference` 引用）与控制 API 保持一致 |
 | 15 | QQ 客户端的 Markdown 渲染器把 `\(…\)` 当**行内公式定界符**（见 Moonlark-Dev/Moonlark#1556），GUI 同样按公式渲染：定界符被吃掉，内容放进 `<span class="qq-math">` | 复杂 TeX（`\frac` 等）在 GUI 里显示的是源码而不是排版后的公式 | 预览层差异：真机由客户端排版，沙箱渲染器仍保持零依赖、只做公式样式；`markdownPlain` 列表预览同样去掉定界符 |
+| 16 | **`union_openid` / `union_group_openid` 是按内部 id 派生的稳定假值**（`sha256("union:<id>")` 前 32 位大写），不是真机的跨应用标识；官方语义是「绑定 3 方应用时才有效」 | 只能断言“存在且稳定、同一实体在所有 Bot 下一致”，不能与真机数据比对 | 沙箱本来就不接开放平台账号体系；`union_group_openid` 用在群信息与进群/退群/成员增减/群消息事件里 |
+| 17 | `GET /v2/users/{openid}/info` **没有好友关系模型**：只要这个 openid 曾由该 Bot 生成过（`openid_map` 有记录）就返回资料，未知 openid 返回 `40184001`（HTTP 403 是沙箱自定，官方只给 code）；openid 解析出来是群/机器人时返回 `10001` | 复现不了“有 openid 但无好友”的拒绝分支（真实平台的前提是成为好友/主动会话过） | 官方该码就是「无好友关系」，沙箱拿它表示「本 Bot 不认识这个 openid」 |
+| 18 | `users.info` 的 `allow_proactive_msg` 反映 **Bot 侧**主动消息开关（`bots.allow_proactive_msg`），不是用户偏好 | 用 `PATCH /_mqs/bots/{id}` 切换即可测 true/false 两个分支 | 沙箱没有用户级推送偏好列；这个值正是 `send_as_bot` 主动消息真正校验的那个 |
+| 19 | 群事件的 `member_nickname` 等于用户昵称（沙箱没有独立群名片），`mentions[].member_nickname` 同理 | 断言“等于 username”即可 | 官方 member_nickname 是群内昵称（card） |
+| 20 | 事件/接口里的 `avatar` 是沙箱自托管的**绝对 URL**（`<sim_base>/avatars/<id>.svg?label=…&kind=…`） | SDK 可以直接下载，但图是本地生成的 SVG 占位头像，不是 QQ 头像 CDN | 官方是 `thirdqq.qlogo.cn` 一类的 https 链接；沙箱不联网 |
+| 21 | **`GROUP_MEMBER_ADD` / `GROUP_MEMBER_REMOVE` 已投递**（官方 intent `1<<24`），触发点是控制 API 加/删群成员、审批通过入群申请、群成员批量移除接口、`POST /_mqs/users/random` 带 `group_id` 批量造人（每个新成员一条）；`GROUP_JOIN_REQUEST` 仍未投递 | 群成员增减可以联调，但批量造人时会一次喷 N 条 ADD 事件；事件驱动的「验群」闭环（申请事件 → 自动审批策略）仍缺 | 见 `docs/UNIMPLEMENTED.md` §5；`timestamp` 按官方是 Unix 秒整数 |
+| 22 | `GROUP_MEMBER_REMOVE` 的 `user_openid` 与 `member_openid` 同值（官方语义是“用户 openid，可能为空”） | 断言两者相等即可；沙箱没有“群内 member openid ↔ 用户 openid”双层体系 | 官方示例里两者恰好相同 |
 
 ## 端口与域名假设
 
@@ -68,7 +75,7 @@ import mqs.compat.botpy   # 必须在创建 botpy.Client 之前 import
 ## 回归方式
 
 ```bash
-cargo test -p mqs                                   # 单元 + 集成（98 项）
+cargo test -p mqs                                   # 单元 + 集成（114 项）
 cargo run -q -p mqs -- serve                        # 或 ./target/debug/mqs serve
 MQS_BASE_URL=http://127.0.0.1:5700 python examples/botpy_echo/bot.py
 mqs script run smoke                                # 需要上面这个 echo bot 在线

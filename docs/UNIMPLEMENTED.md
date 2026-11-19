@@ -1,8 +1,8 @@
 # QSandbox 未实现清单（对照 QQ 机器人官方文档 v2）
 
-> 文档快照：2026-11-09。口径：官方文档站（bot.q.qq.com/wiki）全量 sitemap 174 个 API v2 页面 + 变更记录逐条比对，
-> 与本仓库 `crates/mqs/src/contract.rs` 的 `REGISTRY`（29 个端点）
-> 及 `gateway.rs::intent_for`（仅 `1<<25`、`1<<26`）对照。**查不到路径的写"文档未给出具体路径"，不臆造。**
+> 文档快照：2026-11-19。口径：官方文档站（bot.q.qq.com/wiki）全量 sitemap 174 个 API v2 页面 + 变更记录逐条比对，
+> 与本仓库 `crates/mqs/src/contract.rs` 的 `REGISTRY`（30 个端点）
+> 及 `gateway.rs::intent_for`（`1<<24`、`1<<25`、`1<<26`）对照。**查不到路径的写"文档未给出具体路径"，不臆造。**
 > 本清单只列"文档确实有、沙箱没有"的能力；沙箱多做的东西（如 `msg_type` 直接接受 `keyboard`/`embed`）
 > 不计入缺口，另见 `docs/COMPAT.md`。
 
@@ -37,12 +37,12 @@
 
 ## 3. 群管理未做
 
-群管理主体（群信息、`bot_state`、禁言、黑名单、批量移除、入群申请列表/审批、成员列表/详情）沙箱已覆盖，差的是 2026-08 新增的自动审批策略一类。
+群管理主体（群信息、`bot_state`、禁言、黑名单、批量移除、入群申请列表/审批、成员列表/详情）沙箱已覆盖，差的是 2026-08 新增的自动审批策略一类。2026-11-16 的群统一标识（`union_group_openid`）与群成员增减事件（`GROUP_MEMBER_ADD`/`GROUP_MEMBER_REMOVE`）已于 v0.4.0 补上：前者用沙箱派生的稳定假值，后者的触发点是控制 API 加/删成员、审批通过、批量移除。
 
 - **入群自动审批策略（6 个接口，全缺）** — `GET|POST /v2/groups/join_approval_strategy`、`PATCH|DELETE /v2/groups/join_approval_strategy/{strategy_id}`、`POST /v2/groups/join_approval_strategy/{strategy_id}/execute`、`POST /v2/groups/join_approval_strategy/{strategy_id}/whitelist_users`。限额：一机器人最多 20 个策略、每策略最多 100 个群、默认一年过期、`is_enable=on/off`。影响：自动化拉群/验群类机器人无法在沙箱里跑完整闭环（申请事件 + 策略执行 + 白名单）。
 - **`global_rule` 只能读成 `none`** — `GET /v2/groups/{group_openid}/restrict_chat_setting` 的 `global_rule.mode` 在沙箱恒为 `none`（`community.rs:105` 硬编码），`schedule_rules`/`recurring_rules` 恒空。官方文档对 GET 定义了 `none|always|schedule` 三态与 `MuteScheduleRule`/`MuteRecurringRule`；但 POST 只接受 `members[]`，**文档未给出设置全员禁言的接口**，故这是"只读字段无法建模"，不是漏接口。
 - **`bot_state.member_role` 恒为 `member`** — 官方返回 `member|owner|admin`；沙箱从不返回 `admin`，因此"机器人需为群管理员才生效"的一类行为（自动审批策略、@全员每天 1 次）无法通过该字段验证。
-- **入群申请事件缺失** — `GROUP_JOIN_REQUEST`（intent `GROUP_MEMBER_EVENT (1<<24)`，见 §5），导致 `join_request_list` 只能轮询、事件驱动路径未覆盖。
+- **入群申请事件缺失** — `GROUP_JOIN_REQUEST`（intent `GROUP_MEMBER_EVENT (1<<24)`，见 §5），导致 `join_request_list` 只能轮询、事件驱动路径未覆盖。注意同属 `1<<24` 的 `GROUP_MEMBER_ADD`/`GROUP_MEMBER_REMOVE` 已经投递，缺的只是申请事件本身。
 
 ## 4. 消息类未做
 
@@ -64,10 +64,10 @@
 
 ## 5. 事件未做
 
-沙箱已投递：`GROUP_AT_MESSAGE_CREATE`、`GROUP_MESSAGE_CREATE`、`C2C_MESSAGE_CREATE`、`INTERACTION_CREATE`（仅 type=11）、`GROUP_ADD_ROBOT`、`GROUP_DEL_ROBOT`、`GROUP_MSG_RECEIVE`、`GROUP_MSG_REJECT`。其余全部未投递：
+沙箱已投递：`GROUP_AT_MESSAGE_CREATE`、`GROUP_MESSAGE_CREATE`、`C2C_MESSAGE_CREATE`、`INTERACTION_CREATE`（仅 type=11）、`GROUP_ADD_ROBOT`、`GROUP_DEL_ROBOT`、`GROUP_MEMBER_ADD`、`GROUP_MEMBER_REMOVE`。其余全部未投递：
 
-- **`1<<24` GROUP_MEMBER_EVENT** — `GROUP_JOIN_REQUEST`、`GROUP_MEMBER_ADD`、`GROUP_MEMBER_REMOVE`。注意：官方 intents 总表（`interface-framework/event-emit.html`）里没有 `1<<24`，只在这三个事件页的"Intent"字段里出现，沙箱 `intent_for` 因而不认识它。
-- **`1<<25` 内未实现** — `C2C_MSG_RECEIVE`、`C2C_MSG_REJECT`（沙箱只有群的同名两个）、`SUBSCRIBE_MESSAGE_STATUS`（订阅消息授权结果，含 `subscribe_id`/`op=1|2`）。订阅消息的**发送接口文档未给出具体路径**，只有错误码 304064 与 304062 佐证其存在。
+- **`1<<24` GROUP_MEMBER_EVENT 只差申请事件** — `GROUP_MEMBER_ADD`/`GROUP_MEMBER_REMOVE` 自 v0.4.0 起投递（`timestamp` 为 Unix 秒整数，带 `union_group_openid`）；`GROUP_JOIN_REQUEST` 仍未投递。注意：官方 intents 总表（`interface-framework/event-emit.html`）里没有 `1<<24`，只在这三个事件页的"Intent"字段里出现。
+- **`1<<25` 内未实现** — `GROUP_MSG_RECEIVE`/`GROUP_MSG_REJECT`（`intent_for` 有映射，但**没有任何触发点会真的投递**：控制 API 改 `recv_msg_setting` 不发事件）、`C2C_MSG_RECEIVE`、`C2C_MSG_REJECT`、`SUBSCRIBE_MESSAGE_STATUS`（订阅消息授权结果，含 `subscribe_id`/`op=1|2`）。订阅消息的**发送接口文档未给出具体路径**，只有错误码 304064 与 304062 佐证其存在。
 - **`1<<27` MESSAGE_AUDIT** — `MESSAGE_AUDIT_PASS`/`MESSAGE_AUDIT_REJECT`。
 - **`1<<28` FORUMS_EVENT** — `FORUM_THREAD_CREATE/UPDATE/DELETE`、`FORUM_POST_CREATE/DELETE`、`FORUM_REPLY_CREATE/DELETE`、`FORUM_PUBLISH_AUDIT_RESULT`。
 - **`1<<29` AUDIO_ACTION** — `AUDIO_START`、`AUDIO_FINISH`、`AUDIO_ON_MIC`、`AUDIO_OFF_MIC`。
@@ -78,7 +78,7 @@
 ## 6. 鉴权/网关未做
 
 - **token 复用与提前刷新（已实现）** — 有效期内重复获取返回同一个 token，最后 60 秒内获取会发新 token，旧 token 到过期前仍可用；`expires_in` 返回剩余秒数。与官方语义一致。
-- **intent 无权限的拒绝** — 官方：传了无权限的 intents，gateway 直接报错关连接（关闭码 4013/4014）。沙箱只在投递时按位过滤（`intent_for` 只认 `1<<25`/`1<<26`），未订阅或未映射的位静默丢事件、连接照常。影响：订阅范围写错的 bug 在沙箱里不可见，SDK 会带着这个错误上真机。
+- **intent 无权限的拒绝** — 官方：传了无权限的 intents，gateway 直接报错关连接（关闭码 4013/4014）。沙箱只在投递时按位过滤（`intent_for` 只认 `1<<24`/`1<<25`/`1<<26`），未订阅或未映射的位静默丢事件、连接照常。影响：订阅范围写错的 bug 在沙箱里不可见，SDK 会带着这个错误上真机。
 - **关闭码缺口** — 官方 4001 无效 opcode、4007 seq 错误、4008 发送过快、4011 guild 过多、4012 无效 version、4013 无效 intent、4014 intent 无权限、4900~4913 内部错误、4914 已下架、4915 已封禁。沙箱只有 4002/4004/4006/4009/4010；注意 **4004 不在官方码表里**，文档对"token 无效"只给了 4014，沙箱的 4004 属于自行约定（见 `docs/COMPAT.md`）。
 - **分片与连接数** — `GET /gateway/bot` 返回 `shards`、`session_start_limit{total,remaining,reset_after,max_concurrency}`；官方规定连接数不得超过 `remaining`，分片规则 `shard_id = (guild_id >> 22) % num_shards`。沙箱恒定 `shards:1`、`remaining:999` 且不递减、不校验连接数；**群聊/单聊的分片归属规则文档未给出**，沙箱暂用会话 id 的 crc32。
 - **webhook 部署形态** — 官方回调地址由开发者在管理端配置，端口只允许 80/443/8080/8443，请求头带 `User-Agent: QQBot-Callback`、`X-Bot-Appid`；沙箱是固定路径 `POST /webhook/{bot_id}`。影响：端口白名单、多 Bot 共用一个回调地址两种真实部署形态都没有覆盖。

@@ -7,7 +7,7 @@
 
 use serde_json::{json, Value};
 
-pub const DOC_DATE: &str = "2026-11-09";
+pub const DOC_DATE: &str = "2026-11-19";
 
 #[derive(Debug, Clone)]
 pub struct Endpoint {
@@ -98,6 +98,19 @@ pub static REGISTRY: &[Endpoint] = &[
         [],
         "full",
         ""
+    ),
+    ep!(
+        "user.info",
+        "GET",
+        "/v2/users/{openid}/info",
+        "获取用户基本信息（昵称、头像、union_openid）",
+        "bot",
+        "L1",
+        "user",
+        [],
+        [11241, 11242, 40184001, 42900],
+        "full",
+        "官方 10 QPS；沙箱没有好友关系模型，openid 未知时返回 40184001；allow_proactive_msg 反映 Bot 侧开关"
     ),
     ep!(
         "group.send_message",

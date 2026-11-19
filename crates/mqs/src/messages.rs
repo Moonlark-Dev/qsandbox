@@ -222,16 +222,21 @@ impl World {
                 };
                 let user_openid = Self::openid_tx(conn, bot, "user", user_id)?;
                 let union = union_openid_for(user_id);
+                let nickname = s(&user, "nickname");
+                let author_avatar = self.absolute(&s(&user, "avatar"));
                 let mut author = json!({
                     "id": user_openid,
                     "member_openid": if conv_type == "group" { Value::String(user_openid.clone()) } else { Value::Null },
                     "user_openid": if conv_type == "dm" { Value::String(user_openid.clone()) } else { Value::Null },
                     "union_openid": union,
-                    "username": s(&user, "nickname"),
+                    "username": nickname,
+                    "avatar": author_avatar,
                 });
                 if conv_type == "group" {
                     author["bot"] = Value::Bool(false);
                     author["member_role"] = Value::String(member_role.clone());
+                    // 沙箱没有独立的群内昵称，群昵称 = 用户昵称（官方有 member_nickname/card）。
+                    author["member_nickname"] = Value::String(nickname);
                 }
                 let mut payload = json!({
                     "id": msg_id,
@@ -245,6 +250,7 @@ impl World {
                 if conv_type == "group" {
                     payload["group_openid"] = Value::String(group_openid.clone().unwrap_or_default());
                     payload["group_id"] = Value::String(peer_id.clone());
+                    payload["union_group_openid"] = Value::String(union_openid_for(&peer_id));
                     let explicit = at_bots.is_none() || at_bots.map(|at| at.contains(&bot_id)).unwrap_or(false);
                     if bot_event_type == "GROUP_AT_MESSAGE_CREATE" && explicit {
                         let bot_openid = openid_for(&s(bot, "app_id"), "bot", &bot_id);
@@ -260,25 +266,33 @@ impl World {
                 let mut mention_values: Vec<Value> = Vec::new();
                 for (mid, nickname) in &mentioned_users {
                     let mrow = Self::openid_tx(conn, bot, "user", mid)?;
-                    mention_values.push(json!({
+                    let mut mention = json!({
                         "scope": "single",
                         "bot": false,
                         "id": mrow,
                         "is_you": false,
                         "member_openid": mrow,
                         "username": nickname,
-                    }));
+                    });
+                    if conv_type == "group" {
+                        mention["member_nickname"] = Value::String(nickname.clone());
+                    }
+                    mention_values.push(mention);
                 }
                 for (mid, app_id, name) in &mentioned_bots {
                     let mrow = openid_for(app_id, "bot", mid);
-                    mention_values.push(json!({
+                    let mut mention = json!({
                         "scope": "single",
                         "bot": true,
                         "id": mrow,
                         "is_you": mid == &bot_id,
                         "member_openid": mrow,
                         "username": name,
-                    }));
+                    });
+                    if conv_type == "group" {
+                        mention["member_nickname"] = Value::String(name.clone());
+                    }
+                    mention_values.push(mention);
                 }
                 payload["mentions"] = Value::Array(mention_values);
                 if let Some(reply) = &reply_ref {

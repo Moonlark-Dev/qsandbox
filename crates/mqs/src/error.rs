@@ -38,6 +38,7 @@ pub fn catalog(code: i64) -> (u16, &'static str) {
         40057 => (400, "passive reply window expired or reply count exhausted"),
         40063 => (400, "captcha / message audit required"),
         42900 => (429, "rate limit exceeded"),
+        40184001 => (403, "no friend relation with this user"),
         50001 => (500, "upstream service error"),
         404 => (404, "endpoint is not exposed by this sandbox"),
         _ => (500, "internal error"),
@@ -192,6 +193,13 @@ pub fn bot_offline(message: impl Into<String>) -> ApiError {
 
 pub fn passive_window_expired(message: impl Into<String>) -> ApiError {
     ApiError::new(40057, message)
+}
+
+/// `GET /v2/users/{openid}/info` 的官方错误码：用户与机器人无好友关系。
+pub fn no_friend_relation() -> ApiError {
+    ApiError::new(40184001, "no friend relation: user and bot are not friends").with_hint(
+        "QSandbox 没有好友关系模型：只要这个 openid 曾由该 Bot 生成过（openid_map 里有记录）就会返回用户信息",
+    )
 }
 
 pub fn no_interface_access() -> ApiError {
