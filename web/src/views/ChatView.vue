@@ -546,8 +546,19 @@ function atUserName(message: any, id: string): string | undefined {
   return hit?.username || undefined
 }
 
+// 素材管理上传的图片以 `qqbot-media://image/v1/<token>` 引用；控制 API 会在
+// 消息上附带 token → 预览 URL 的映射（`media_images`），这里换成可直接加载的地址。
+function mediaImagePreview(message: any, url: string): string | undefined {
+  const list = message?.media_images || message?.raw?.media_images || []
+  const hit = list.find((item: any) => item?.url === url)
+  return typeof hit?.preview_url === 'string' ? hit.preview_url : undefined
+}
+
 function markdownOptions(message: any) {
-  return { atUser: (id: string) => atUserName(message, id) }
+  return {
+    atUser: (id: string) => atUserName(message, id),
+    image: (url: string) => mediaImagePreview(message, url),
+  }
 }
 
 function renderBody(message: any, forPreview = false): string {

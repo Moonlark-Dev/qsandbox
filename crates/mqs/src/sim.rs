@@ -11,14 +11,14 @@ use base64::Engine;
 use serde_json::{json, Map, Value};
 
 use crate::config::VERSION;
-use crate::error::{invalid_param, message_not_found, MqsResult};
+use crate::error::{invalid_param, media_too_large, message_not_found, MqsResult};
 use crate::http::{
     attach_rate, json_status, openapi_document, sim_log_mw, trace_mw, AppState, BotCtx, QqJson,
     WhitelistedBot,
 };
 use crate::ids::avatar_svg;
 use crate::models::{AppAccessTokenRequest, MessageSendRequest};
-use crate::world::{sniff_mime, World};
+use crate::world::{sniff_mime, World, MEDIA_IMAGE_MAX_BYTES};
 
 const FILE_LIMITS: [(i64, usize); 3] = [
     (1, 10 * 1024 * 1024),
@@ -652,6 +652,88 @@ async fn avatar(
         .into_response())
 }
 
+// ------------------------------------------------------------------ material images
+async fn media_image_prepare(
+    State(state): State<Arc<AppState>>,
+    BotCtx(bot): BotCtx,
+    QqJson(body): QqJson<Map<String, Value>>,
+) -> MqsResult<Json<Value>> {
+    let bot_id = bot["id"].as_str().unwrap_or("");
+    Ok(Json(state.world.prepare_media_image(bot_id, &body)?))
+}
+
+async fn media_image_complete(
+    State(state): State<Arc<AppState>>,
+    BotCtx(bot): BotCtx,
+    QqJson(body): QqJson<Map<String, Value>>,
+) -> MqsResult<Json<Value>> {
+    let bot_id = bot["id"].as_str().unwrap_or("");
+    Ok(Json(state.world.complete_media_image(bot_id, &body)?))
+}
+
+async fn media_image_list(
+    State(state): State<Arc<AppState>>,
+    BotCtx(bot): BotCtx,
+    Query(query): Query<Map<String, Value>>,
+) -> MqsResult<Json<Value>> {
+    let bot_id = bot["id"].as_str().unwrap_or("");
+    let cursor = query
+        .get("cursor")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    Ok(Json(state.world.list_media_images(bot_id, &cursor)?))
+}
+
+async fn media_image_delete(
+    State(state): State<Arc<AppState>>,
+    Path(image_id): Path<String>,
+    BotCtx(bot): BotCtx,
+) -> MqsResult<Json<Value>> {
+    let bot_id = bot["id"].as_str().unwrap_or("");
+    state.world.delete_media_image(bot_id, &image_id)?;
+    Ok(Json(json!({})))
+}
+
+/// 预签名 URL 的直传入口。真实平台是 COS 地址，沙箱用 `/v2/media-images/uploads/{id}`
+/// 加 `sign`/`expires` 查询参数模拟，因此这里没有 Bot token 鉴权。
+async fn media_image_upload(
+    State(state): State<Arc<AppState>>,
+    Path(upload_id): Path<String>,
+    Query(query): Query<Map<String, Value>>,
+    headers: HeaderMap,
+    req: Request,
+) -> MqsResult<Response> {
+    let sign = query
+        .get("sign")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let expires = query
+        .get("expires")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let bytes = axum::body::to_bytes(req.into_body(), MEDIA_IMAGE_MAX_BYTES + 1)
+        .await
+        .map_err(|_| media_too_large("uploaded body exceeds the 10MB image limit"))?;
+    let etag =
+        state
+            .world
+            .put_media_image_upload(&upload_id, &sign, &expires, &content_type, &bytes)?;
+    Ok((
+        StatusCode::OK,
+        [(header::ETAG, format!("\"{etag}\""))],
+        axum::body::Body::empty(),
+    )
+        .into_response())
+}
+
 // ------------------------------------------------------------------ group management
 async fn group_entity(world: &World, bot_id: &str, group_openid: &str) -> MqsResult<String> {
     let mapping = world.resolve_openid(bot_id, group_openid)?;
@@ -972,6 +1054,17 @@ pub fn sim_router(state: Arc<AppState>) -> Router {
         )
         .route("/v2/groups/{group_openid}/files", post(group_upload_file))
         .route("/v2/users/{openid}/files", post(c2c_upload_file))
+        .route("/v2/media-images/prepare", post(media_image_prepare))
+        .route("/v2/media-images/complete", post(media_image_complete))
+        .route(
+            "/v2/media-images/uploads/{upload_id}",
+            put(media_image_upload),
+        )
+        .route("/v2/media-images", get(media_image_list))
+        .route(
+            "/v2/media-images/{image_id}/delete",
+            delete(media_image_delete),
+        )
         .route("/v2/groups/{group_openid}/info", get(group_info))
         .route("/v2/groups/{group_openid}/bot_state", get(group_bot_state))
         .route(
@@ -1043,6 +1136,11 @@ pub const ROUTE_TABLE: &[(&str, &str)] = &[
     ("POST", "/v2/users/{openid}/upload_part_finish"),
     ("POST", "/v2/groups/{group_openid}/files"),
     ("POST", "/v2/users/{openid}/files"),
+    ("POST", "/v2/media-images/prepare"),
+    ("POST", "/v2/media-images/complete"),
+    ("PUT", "/v2/media-images/uploads/{upload_id}"),
+    ("GET", "/v2/media-images"),
+    ("DELETE", "/v2/media-images/{image_id}/delete"),
     ("GET", "/v2/groups/{group_openid}/info"),
     ("GET", "/v2/groups/{group_openid}/bot_state"),
     ("GET", "/v2/groups/{group_openid}/restrict_chat_setting"),

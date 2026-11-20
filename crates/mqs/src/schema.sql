@@ -1,4 +1,4 @@
--- QSandbox schema v1 (Rust rewrite, single baseline: guild/channel family removed)
+-- QSandbox schema v2 (Rust rewrite, single baseline: guild/channel family removed)
 -- Single-writer SQLite. Every change goes through the domain layer, never the API.
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -208,6 +208,43 @@ CREATE TABLE IF NOT EXISTS rules (
     enabled        INTEGER NOT NULL DEFAULT 1,
     created_at     INTEGER NOT NULL
 );
+
+
+-- 素材管理（material-management）：Markdown 图片先上传、再以 qqbot-media:// 引用。
+-- 图片与 Bot 绑定；token 是 qqbot-media URL 里的引用标记，上传任务单独一张表。
+CREATE TABLE IF NOT EXISTS media_images (
+    id           TEXT PRIMARY KEY,                 -- image_id，形如 <app_id>_<rand>
+    bot_id       TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+    token        TEXT NOT NULL UNIQUE,             -- qqbot-media://image/v1/<token>
+    media_hash   TEXT NOT NULL,                    -- media 表的内容哈希（预览/转存用）
+    file_name    TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    size         INTEGER NOT NULL,
+    md5          TEXT NOT NULL,
+    sha1         TEXT NOT NULL,
+    created_at   INTEGER NOT NULL,
+    expires_at   INTEGER NOT NULL,                 -- 滑动过期：最后一次被引用 + 90 天
+    deleted_at   INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS media_image_uploads (
+    id                 TEXT PRIMARY KEY,           -- upload_id（4 小时有效）
+    bot_id             TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+    file_name          TEXT NOT NULL,
+    content_type       TEXT NOT NULL,
+    size               INTEGER NOT NULL,
+    md5                TEXT NOT NULL,
+    sha1               TEXT NOT NULL,
+    presign_token      TEXT NOT NULL,              -- 模拟 COS 预签名 URL 的 sign 参数
+    presign_expires_at INTEGER NOT NULL,
+    created_at         INTEGER NOT NULL,
+    expires_at         INTEGER NOT NULL,
+    uploaded_at        INTEGER NOT NULL DEFAULT 0,
+    etag               TEXT NOT NULL DEFAULT '',   -- PUT 时算出的文件 MD5
+    media_hash         TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_media_images_bot ON media_images(bot_id, deleted_at, expires_at, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, seq);
 CREATE INDEX IF NOT EXISTS idx_messages_sent ON messages(sent_at);

@@ -37,7 +37,7 @@ mqs serve --profile dev --host 127.0.0.1 --port 0 --control-port 0
 - **默认只绑 127.0.0.1**；`--host 0.0.0.0` 要求显式 `--token`，并在 stderr 打警告。
 - **信号**：SIGINT/SIGTERM → 两个 listener 优雅关闭 → 关网关连接 → 删 runtime.json → 释放锁。
 
-## 2. 数据模型（`crates/mqs/src/schema.sql`，schema v1）
+## 2. 数据模型（`crates/mqs/src/schema.sql`，schema v2）
 
 ```sql
 settings          -- key/value（JSON 编码）
@@ -56,6 +56,8 @@ gateway_sessions  -- session_id, intents, last_seq, shard, closed_at
 webhook_endpoints -- bot_id, url, secret
 app_tokens        -- token → bot_id, expires_at（受虚拟时钟控制）
 media             -- (hash) → mime, size, path
+media_images      -- 素材图片：image_id → token/媒体哈希/90 天滑动过期
+media_image_uploads -- 素材上传任务：upload_id、预签名 sign、4 小时有效
 reply_windows     -- (msg_id,bot_id) → count, expires_at
 reply_keys        -- (bot_id,msg_id,msg_seq)  ★ 显式去重
 active_quota      -- (bot_id,conversation_id,day) → used
@@ -130,6 +132,11 @@ HTTP 状态：参数/语义 400，鉴权 401，权限/白名单 403，不存在 
 | 40055 | 主动消息配额不足 |
 | 40056 | 机器人不在线 |
 | 40057 | 被动回复窗口过期 / 次数用尽 |
+| 40035001 / 40035002 | 素材图片格式不支持 / 超过 10MB |
+| 40035003 | 素材上传任务不存在、过期或不属于当前 Bot |
+| 40035006 | 素材内部错误（媒体对象丢失等） |
+| 40035007 / 40035008 | 素材图片数量超限 / 图片不存在或已删除 |
+| 40035009 / 40035010 | 引用已过期或已删除 / 引用无效或属于其他 Bot |
 | 42900 | 限流（带 `Retry-After`、`X-RateLimit-*`） |
 
 ### 3.5 限流（官方频率政策）
@@ -146,6 +153,13 @@ HTTP 状态：参数/语义 400，鉴权 401，权限/白名单 403，不存在 
   → `files` 带 `upload_id`。
 - 返回 `{file_uuid, file_info:"mqs-file-<sha256>", ttl:0}`；`GET /media/<sha256>` 下载。
 - 限制：图片 10MB、视频 30MB、语音 5MB；`file_type=4`（普通文件）明确不支持（官方标注暂不开放）。
+- **素材管理**：`POST /v2/media-images/prepare`（扩展名/Content-Type 必须匹配 png/jpeg/gif/webp，
+  ≤10MB，返回 `upload_id`/`presigned_url`/`expires_in`）→ `PUT` 预签名 URL（校验 Content-Type，
+  响应 `ETag` = 文件 MD5）→ `POST /v2/media-images/complete`（校验 MD5/ETag，返回
+  `image_id`/`qqbot-media://image/v1/<token>`/`ttl=7776000`/`preview_url`）。
+  `GET /v2/media-images` 游标分页、`DELETE .../{image_id}/delete` 删除。图片与 Bot 绑定，
+  单 Bot 默认 100 张（设置项 `media_image_limit`），发送 Markdown 引用成功后 90 天有效期顺延；
+  upload_id 4 小时、预签名 URL 1 小时，均受虚拟时钟控制。
 
 ## 4. 控制 API（`/_mqs/*`）
 

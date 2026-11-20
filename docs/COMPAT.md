@@ -1,6 +1,6 @@
 # SDK 兼容性与已知差异
 
-> 文档快照：2026-11-19 · 对应 QSandbox v0.4（Rust + Tauri）
+> 文档快照：2026-11-20 · 对应 QSandbox v0.5（Rust + Tauri）
 
 ## 已实测
 
@@ -65,6 +65,14 @@ import mqs.compat.botpy   # 必须在创建 botpy.Client 之前 import
 | 21 | **`GROUP_MEMBER_ADD` / `GROUP_MEMBER_REMOVE` 已投递**（官方 intent `1<<24`），触发点是控制 API 加/删群成员、审批通过入群申请、群成员批量移除接口、`POST /_mqs/users/random` 带 `group_id` 批量造人（每个新成员一条）；`GROUP_JOIN_REQUEST` 仍未投递 | 群成员增减可以联调，但批量造人时会一次喷 N 条 ADD 事件；事件驱动的「验群」闭环（申请事件 → 自动审批策略）仍缺 | 见 `docs/UNIMPLEMENTED.md` §5；`timestamp` 按官方是 Unix 秒整数 |
 | 22 | `GROUP_MEMBER_REMOVE` 的 `user_openid` 与 `member_openid` 同值（官方语义是“用户 openid，可能为空”） | 断言两者相等即可；沙箱没有“群内 member openid ↔ 用户 openid”双层体系 | 官方示例里两者恰好相同 |
 
+| 23 | **素材图片的预签名 URL 是沙箱自建的 `PUT /v2/media-images/uploads/{upload_id}?sign=…&expires=…`**，不是 COS 域名；该 PUT 不校验 Bot token（真实平台靠 COS 签名） | 按官方流程把 `presigned_url` 原样 PUT 即可；不要把它当成固定路径写死 | Content-Type 必须与 prepare 一致（模拟 COS 的 403）；sign/expires 不匹配、预签名过期或 upload_id 不存在/过期都返回 `40035003`（真实 COS 用 403），响应 `ETag` 引号内即文件 MD5 |
+| 24 | `preview_url` 是 `<sim_base>/media/<sha256>` 的**长期公开地址**，不是短时效 COS 预签名链接 | 可以断言/预览，但不要把它当成官方「短期有效、请勿持久化」的语义测试 | 图片字节仍在内容哈希媒体库，删除素材图片不会删除已发送消息引用的副本 |
+| 25 | 素材图片上限可用设置项 `media_image_limit` 调整（默认 100）；`upload_id` 4 小时、预签名 URL 1 小时、90 天滑动过期都受**虚拟时钟**控制 | 可以用 `clock advance` 测过期/顺延，不必等真实时间 | 官方固定 100 张；沙箱多出的设置项只影响配额校验。complete 的「计数 + 插入」在同一 SQLite 事务里，不会并发超限 |
+| 26 | `prepare` 按官方说明用 `sha1` 做幂等：同一 Bot 对同一 `sha1`（且 md5/文件名/类型/大小一致）且未过期的上传任务复用同一个 `upload_id`，只刷新预签名 URL | 重复 prepare 不会产生多个上传任务 | 官方只写了「sha1 用于登记与幂等识别」，未规定复用范围；沙箱按最保守的同文件同任务处理 |
+| 27 | 发送 Markdown 时，沙箱只解析 `![…](…)` 图片目标里的 `qqbot-media://image/v1/<token>`（跳过 code span / fenced block）；正文裸写或普通链接里的该串不校验也不顺延有效期 | 引用校验与滑动过期按“图片语法”生效 | 校验结果：未知/他人 token → `40035010`（HTTP 403）；已删除/过期 → `40035009`（HTTP 400）；成功后在同一事务里顺延 `expires_at` |
+| 28 | 发送时按文件头（前 16 字节）嗅探图片格式并与 `prepare` 声明的 `content_type` 比对，不匹配 → `40035001`；`complete` 本身成功 | 内容不合法的图片会在发送这一步被拒，与官方「complete 可能成功、发送时格式检查失败」一致 | 只做文件头 sniff，不做完整解码；JPEG/PNG/GIF/WebP 的有效性以解码器为准，沙箱不模拟 |
+| 29 | 控制 API 的消息对象额外带 `media_images: [{token,url,image_id,file_name,preview_url,expires_at}]`，GUI 用它把 `qqbot-media://` 渲染成可加载的预览图 | 这是控制面扩展字段，不是 QQ 推送字段 | 与 `at_users` 同类处理：网关 payload/`raw` 保持原样 |
+
 ## 端口与域名假设
 
 - botpy 默认 `is_sandbox=False`，垫片同时改 `DOMAIN` 和 `SANDBOX_DOMAIN`，两种都指向沙箱。
@@ -75,7 +83,7 @@ import mqs.compat.botpy   # 必须在创建 botpy.Client 之前 import
 ## 回归方式
 
 ```bash
-cargo test -p mqs                                   # 单元 + 集成（114 项）
+cargo test -p mqs                                   # 单元 + 集成（128 项）
 cargo run -q -p mqs -- serve                        # 或 ./target/debug/mqs serve
 MQS_BASE_URL=http://127.0.0.1:5700 python examples/botpy_echo/bot.py
 mqs script run smoke                                # 需要上面这个 echo bot 在线

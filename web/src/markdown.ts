@@ -21,6 +21,8 @@ export function escapeHtml(value: string): string {
 export interface MarkdownOptions {
   /** Resolve `<qqbot-at-user id="…">`'s openid to a group nickname. */
   atUser?: (id: string) => string | undefined
+  /** Resolve a `qqbot-media://image/v1/<token>` reference to a preview URL. */
+  image?: (url: string) => string | undefined
 }
 
 // QQ text-interaction tags (official `trans/text-chain.html`).  They are part
@@ -127,9 +129,11 @@ function renderInline(source: string, options: MarkdownOptions): string {
   text = escapeHtml(text)
 
   text = text.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (match, alt: string, url: string) => {
-    const safe = safeUrl(url)
-    if (!safe) return match
-    return keep(`<img class="md-image" src="${escapeHtml(safe)}" alt="${alt}" loading="lazy" />`)
+    const resolved = url.startsWith('qqbot-media://')
+      ? options.image?.(url)
+      : safeUrl(url)
+    if (!resolved) return match
+    return keep(`<img class="md-image" src="${escapeHtml(resolved)}" alt="${alt}" loading="lazy" />`)
   })
   text = text.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (match, label: string, url: string) => {
     const safe = safeUrl(url)

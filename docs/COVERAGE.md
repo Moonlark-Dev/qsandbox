@@ -1,13 +1,13 @@
 # QSandbox 接口覆盖率
 
-> 自动生成 · 文档快照 2026-11-19 · 请勿手改
+> 自动生成 · 文档快照 2026-11-20 · 请勿手改
 
-**30 endpoints — 30 implemented, 0 stubs, 0 n/a**
+**35 endpoints — 35 implemented, 0 stubs, 0 n/a**
 
 | 层级 | 总数 | full | partial | stub | n/a |
 |---|---|---|---|---|---|
 | L0 | 6 | 6 | 0 | 0 | 0 |
-| L1 | 12 | 10 | 2 | 0 | 0 |
+| L1 | 17 | 15 | 2 | 0 | 0 |
 | L2 | 9 | 9 | 0 | 0 | 0 |
 | L3 | 3 | 2 | 1 | 0 | 0 |
 
@@ -27,6 +27,11 @@
 | `POST` | `/v2/groups/{group_openid}/upload_part_finish` | full | Bot Token | L1 | 群聊富媒体分片上传：完成分片 |
 | `POST` | `/v2/groups/{group_openid}/upload_prepare` | full | Bot Token | L1 | 群聊富媒体分片上传：预上传 |
 | `PUT` | `/v2/interactions/{interaction_id}` | full | Bot Token | L1 | 确认按钮回调结果（code 0 成功） |
+| `GET` | `/v2/media-images` | full | Bot Token | L1 | 素材管理：查询有效图片（游标分页） |
+| `POST` | `/v2/media-images/complete` | full | Bot Token | L1 | 素材管理：完成上传，返回 qqbot-media 引用 |
+| `POST` | `/v2/media-images/prepare` | full | Bot Token | L1 | 素材管理：申请图片上传（预签名 URL） |
+| `PUT` | `/v2/media-images/uploads/{upload_id}` | full | 无 | L1 | 素材管理：直传图片二进制（模拟 COS 预签名 PUT） |
+| `DELETE` | `/v2/media-images/{image_id}/delete` | full | Bot Token | L1 | 素材管理：删除图片并释放数量配额 |
 | `PUT` | `/v2/uploads/{upload_id}/parts/{index}` | full | 无 | L1 | 富媒体分片上传：上传分片（预签名 URL） |
 | `POST` | `/v2/users/{openid}/files` | full | Bot Token | L1 | 上传单聊富媒体文件 |
 | `GET` | `/v2/users/{openid}/info` | full | Bot Token | L1 | 获取用户基本信息（昵称、头像、union_openid） |

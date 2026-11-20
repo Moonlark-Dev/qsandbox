@@ -10,13 +10,14 @@ use crate::clock::Clock;
 use crate::config::ProfilePaths;
 use crate::db::{self, b, conn_exec, conn_one, i, json_col, s, s_opt, Database, Row, V};
 use crate::error::{
-    internal, invalid_app_id, invalid_param, invalid_secret, invalid_token, token_expired,
-    MqsResult,
+    internal, invalid_app_id, invalid_param, invalid_secret, invalid_token,
+    media_format_unsupported, media_image_missing, media_internal, media_quota_exceeded,
+    media_too_large, media_upload_invalid, token_expired, MqsResult,
 };
 use crate::gateway::GatewayManager;
 use crate::hub::Hub;
 use crate::ids::{
-    media_hash, new_event_id, new_session_id, openid_for, union_openid_for, FakeData,
+    media_hash, new_event_id, new_session_id, openid_for, short_token, union_openid_for, FakeData,
 };
 use crate::p;
 use crate::ratelimit::RateLimiter;
@@ -25,6 +26,34 @@ pub const BOT_SCOPE_GROUP: &str = "group_message";
 pub const BOT_SCOPE_C2C: &str = "c2c_message";
 pub const BOT_SCOPE_MEDIA: &str = "media";
 pub const BOT_SCOPE_MEMBER: &str = "member";
+
+pub const MEDIA_IMAGE_TTL_MS: i64 = 90 * 24 * 60 * 60 * 1000;
+pub const MEDIA_IMAGE_UPLOAD_TTL_MS: i64 = 4 * 60 * 60 * 1000;
+pub const MEDIA_IMAGE_PRESIGN_TTL_MS: i64 = 60 * 60 * 1000;
+pub const MEDIA_IMAGE_MAX_BYTES: usize = 10 * 1024 * 1024;
+pub const MEDIA_IMAGE_PAGE_SIZE: i64 = 20;
+
+/// 素材图片只接受这四种格式；扩展名与 `content_type` 必须一一对应。
+fn normalize_media_image_type(content_type: &str) -> Option<&'static str> {
+    match content_type.trim().to_ascii_lowercase().as_str() {
+        "image/png" => Some("image/png"),
+        "image/jpeg" => Some("image/jpeg"),
+        "image/gif" => Some("image/gif"),
+        "image/webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
+fn media_image_type_for_name(file_name: &str) -> Option<&'static str> {
+    let extension = file_name.rsplit_once('.')?.1.to_ascii_lowercase();
+    match extension.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct UploadSession {
@@ -1392,6 +1421,18 @@ impl World {
                 data.insert(key.into(), value.clone());
             }
         }
+        if let Some(bot_id) = row
+            .get("bot_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            if let Some(source) = crate::messages::markdown_source(&raw) {
+                let images = self.media_images_in_markdown(bot_id, source)?;
+                if !images.is_empty() {
+                    data.insert("media_images".into(), Value::Array(images));
+                }
+            }
+        }
         if raw.get("media").is_some() && !data.contains_key("attachments") {
             if let Some(file_info) = raw["media"].get("file_info").and_then(|v| v.as_str()) {
                 let mhash = file_info.strip_prefix("mqs-file-").unwrap_or(file_info);
@@ -1885,6 +1926,466 @@ impl World {
             result["message"] = sent;
         }
         Ok(result)
+    }
+
+    // ------------------------------------------------------------------ material images
+    // QQ 素材管理（material-management）：先申请上传、用预签名 URL 直传二进制，
+    // 完成后拿到 `qqbot-media://image/v1/<token>` 供 Markdown 引用。图片与 Bot
+    // 绑定，引用后 90 天滑动过期；上传任务 4 小时有效、预签名 URL 1 小时。
+    pub fn media_image_meta(
+        &self,
+        body: &Map<String, Value>,
+    ) -> MqsResult<(String, String, i64, String, String)> {
+        let file_name = body
+            .get("file_name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| invalid_param("file_name is required"))?
+            .to_string();
+        let content_type = body
+            .get("content_type")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| invalid_param("content_type is required"))?;
+        let content_type = normalize_media_image_type(content_type).ok_or_else(|| {
+            media_format_unsupported(
+                "content_type must be one of image/png, image/jpeg, image/gif, image/webp",
+            )
+        })?;
+        let extension_type = media_image_type_for_name(&file_name).ok_or_else(|| {
+            media_format_unsupported("file_name must end with .png, .jpg, .jpeg, .gif or .webp")
+        })?;
+        if extension_type != content_type {
+            return Err(media_format_unsupported(format!(
+                "file_name extension and content_type must match (got {content_type})"
+            )));
+        }
+        let size = body
+            .get("file_size")
+            .and_then(Value::as_i64)
+            .filter(|size| *size > 0)
+            .ok_or_else(|| invalid_param("file_size must be a positive integer"))?;
+        if size as usize > MEDIA_IMAGE_MAX_BYTES {
+            return Err(media_too_large(format!(
+                "file_size {size} exceeds the 10MB image limit"
+            )));
+        }
+        let md5 = body
+            .get("md5")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        if md5.len() != 32 || !md5.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(invalid_param("md5 must be a 32-character hex string"));
+        }
+        let sha1 = body
+            .get("sha1")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        if sha1.len() != 40 || !sha1.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(invalid_param("sha1 must be a 40-character hex string"));
+        }
+        Ok((file_name, content_type.to_string(), size, md5, sha1))
+    }
+
+    pub fn media_image_limit(&self) -> i64 {
+        self.setting_i64("media_image_limit").clamp(0, 10_000)
+    }
+
+    pub fn count_valid_media_images(&self, bot_id: &str) -> MqsResult<i64> {
+        let now = self.clock.now_ms();
+        Ok(self
+            .db
+            .one(
+                "SELECT COUNT(*) AS c FROM media_images WHERE bot_id=? AND deleted_at=0 AND expires_at>?",
+                &p![bot_id, now],
+            )?
+            .map(|row| i(&row, "c"))
+            .unwrap_or(0))
+    }
+
+    pub fn prepare_media_image(&self, bot_id: &str, body: &Map<String, Value>) -> MqsResult<Value> {
+        let (file_name, content_type, size, md5, sha1) = self.media_image_meta(body)?;
+        let now = self.clock.now_ms();
+        // sha1 用于上传任务登记与幂等识别：同一 Bot 对同一文件重复 prepare 时
+        // 复用未过期的 upload_id，只刷新预签名 URL。
+        if let Some(existing) = self.db.one(
+            "SELECT * FROM media_image_uploads WHERE bot_id=? AND sha1=? AND md5=? AND file_name=? \
+             AND content_type=? AND size=? AND expires_at>? ORDER BY created_at DESC LIMIT 1",
+            &p![bot_id, &sha1, &md5, &file_name, &content_type, size, now],
+        )? {
+            let upload_id = s(&existing, "id");
+            let presign_token = short_token(32);
+            let presign_expires_at = now + MEDIA_IMAGE_PRESIGN_TTL_MS;
+            self.db.execute(
+                "UPDATE media_image_uploads SET presign_token=?, presign_expires_at=? WHERE id=?",
+                &p![&presign_token, presign_expires_at, &upload_id],
+            )?;
+            return Ok(self.media_image_prepare_response(
+                &upload_id,
+                &presign_token,
+                presign_expires_at,
+            ));
+        }
+        let limit = self.media_image_limit();
+        if self.count_valid_media_images(bot_id)? >= limit {
+            return Err(media_quota_exceeded(format!(
+                "the bot already has {limit} valid images; delete some before uploading more"
+            )));
+        }
+        let upload_id = format!("upload_{}_{}", now, &new_session_id()[..6]);
+        let presign_token = short_token(32);
+        let presign_expires_at = now + MEDIA_IMAGE_PRESIGN_TTL_MS;
+        self.db.execute(
+            "INSERT INTO media_image_uploads(id,bot_id,file_name,content_type,size,md5,sha1,\
+             presign_token,presign_expires_at,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            &p![
+                &upload_id,
+                bot_id,
+                &file_name,
+                &content_type,
+                size,
+                &md5,
+                &sha1,
+                &presign_token,
+                presign_expires_at,
+                now,
+                now + MEDIA_IMAGE_UPLOAD_TTL_MS
+            ],
+        )?;
+        Ok(self.media_image_prepare_response(&upload_id, &presign_token, presign_expires_at))
+    }
+
+    fn media_image_prepare_response(
+        &self,
+        upload_id: &str,
+        presign_token: &str,
+        presign_expires_at: i64,
+    ) -> Value {
+        let path = format!(
+            "/v2/media-images/uploads/{upload_id}?sign={presign_token}&expires={}",
+            presign_expires_at / 1000
+        );
+        json!({
+            "upload_id": upload_id,
+            "presigned_url": self.absolute(&path),
+            "expires_in": MEDIA_IMAGE_PRESIGN_TTL_MS / 1000,
+        })
+    }
+
+    /// 模拟 COS 的预签名 PUT：sign/expires 校验通过后把二进制存进内容哈希媒体库，
+    /// 返回文件 MD5（与真实 COS 的 ETag 同值）。
+    pub fn put_media_image_upload(
+        &self,
+        upload_id: &str,
+        sign: &str,
+        expires: &str,
+        content_type: &str,
+        data: &[u8],
+    ) -> MqsResult<String> {
+        let now = self.clock.now_ms();
+        let row = self
+            .db
+            .one(
+                "SELECT * FROM media_image_uploads WHERE id=?",
+                &p![upload_id],
+            )?
+            .ok_or_else(|| media_upload_invalid("upload task does not exist"))?;
+        if i(&row, "expires_at") <= now {
+            return Err(media_upload_invalid(
+                "upload task expired (upload_id is valid for 4 hours)",
+            ));
+        }
+        if s(&row, "presign_token") != sign {
+            return Err(media_upload_invalid("invalid presigned_url signature"));
+        }
+        if expires.parse::<i64>().ok() != Some(i(&row, "presign_expires_at") / 1000) {
+            return Err(media_upload_invalid(
+                "presigned_url expires parameter does not match the upload task",
+            ));
+        }
+        if i(&row, "presign_expires_at") <= now {
+            return Err(media_upload_invalid(
+                "presigned_url expired; call /v2/media-images/prepare again",
+            ));
+        }
+        let expected = s(&row, "content_type");
+        if !content_type.trim().eq_ignore_ascii_case(&expected) {
+            let mut error = media_format_unsupported(format!(
+                "PUT Content-Type must be {expected:?} (the type declared in prepare), got {content_type:?}"
+            ));
+            // The real COS rejects a mismatched Content-Type with HTTP 403.
+            error.status = 403;
+            return Err(error);
+        }
+        if data.is_empty() {
+            return Err(invalid_param("empty upload body"));
+        }
+        if data.len() > MEDIA_IMAGE_MAX_BYTES {
+            return Err(media_too_large(format!(
+                "uploaded {} bytes, exceeds the 10MB image limit",
+                data.len()
+            )));
+        }
+        use md5::{Digest, Md5};
+        let etag = Md5::digest(data)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
+        let media = self.store_media(data, &expected)?;
+        let media_hash = s(&media, "hash");
+        self.db.execute(
+            "UPDATE media_image_uploads SET uploaded_at=?, etag=?, media_hash=? WHERE id=?",
+            &p![now, &etag, &media_hash, upload_id],
+        )?;
+        Ok(etag)
+    }
+
+    pub fn complete_media_image(
+        &self,
+        bot_id: &str,
+        body: &Map<String, Value>,
+    ) -> MqsResult<Value> {
+        let upload_id = body
+            .get("upload_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| invalid_param("upload_id is required"))?;
+        let md5 = body
+            .get("md5")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        if md5.len() != 32 || !md5.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(invalid_param("md5 must be a 32-character hex string"));
+        }
+        let now = self.clock.now_ms();
+        let row = self
+            .db
+            .one(
+                "SELECT * FROM media_image_uploads WHERE id=?",
+                &p![upload_id],
+            )?
+            .ok_or_else(|| media_upload_invalid("upload task does not exist"))?;
+        if s(&row, "bot_id") != bot_id {
+            return Err(media_upload_invalid(
+                "upload task does not belong to this bot",
+            ));
+        }
+        if i(&row, "expires_at") <= now {
+            return Err(media_upload_invalid(
+                "upload task expired (upload_id is valid for 4 hours)",
+            ));
+        }
+        if i(&row, "uploaded_at") == 0 {
+            return Err(media_upload_invalid(
+                "the binary has not been PUT to the presigned_url yet",
+            ));
+        }
+        if s(&row, "etag") != md5 {
+            return Err(media_upload_invalid(
+                "md5 does not match the uploaded object's ETag",
+            ));
+        }
+        let media_hash = s(&row, "media_hash");
+        let media_path = self.paths.media().join(&media_hash);
+        if self.media_by_hash(&media_hash)?.is_none() || !media_path.exists() {
+            return Err(media_internal(
+                "the uploaded image object is missing from the media store",
+            ));
+        }
+        let image_id = format!("{}_{}", bot_id, new_session_id()[..16].to_ascii_lowercase());
+        let token = short_token(43);
+        let file_name = s(&row, "file_name");
+        let content_type = s(&row, "content_type");
+        let size = i(&row, "size");
+        let row_md5 = s(&row, "md5");
+        let row_sha1 = s(&row, "sha1");
+        let limit = self.media_image_limit();
+        self.db.tx(|conn| {
+            // count + INSERT 必须原子，否则并发 complete 会突破 100 张上限。
+            let count = conn_one(
+                conn,
+                "SELECT COUNT(*) AS c FROM media_images WHERE bot_id=? AND deleted_at=0 AND expires_at>?",
+                &p![bot_id, now],
+            )?
+            .map(|row| i(&row, "c"))
+            .unwrap_or(0);
+            if count >= limit {
+                return Err(media_quota_exceeded(format!(
+                    "the bot already has {limit} valid images"
+                )));
+            }
+            conn_exec(
+                conn,
+                "INSERT INTO media_images(id,bot_id,token,media_hash,file_name,content_type,size,md5,sha1,\
+                 created_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                &p![
+                    &image_id,
+                    bot_id,
+                    &token,
+                    &media_hash,
+                    &file_name,
+                    &content_type,
+                    size,
+                    &row_md5,
+                    &row_sha1,
+                    now,
+                    now + MEDIA_IMAGE_TTL_MS
+                ],
+            )?;
+            conn_exec(
+                conn,
+                "DELETE FROM media_image_uploads WHERE id=?",
+                &p![upload_id],
+            )?;
+            Ok(())
+        })?;
+        Ok(json!({
+            "image_id": image_id,
+            "url": format!("qqbot-media://image/v1/{token}"),
+            "ttl": MEDIA_IMAGE_TTL_MS / 1000,
+            "preview_url": self.absolute(&format!("/media/{media_hash}")),
+        }))
+    }
+
+    pub fn media_image_out(&self, row: &Row) -> Value {
+        json!({
+            "image_id": s(row, "id"),
+            "url": format!("qqbot-media://image/v1/{}", s(row, "token")),
+            "file_name": s(row, "file_name"),
+            "preview_url": self.absolute(&format!("/media/{}", s(row, "media_hash"))),
+            "created_at": i(row, "created_at") / 1000,
+            "expires_at": i(row, "expires_at") / 1000,
+        })
+    }
+
+    pub fn list_media_images(&self, bot_id: &str, cursor: &str) -> MqsResult<Value> {
+        let now = self.clock.now_ms();
+        let total = self.count_valid_media_images(bot_id)?;
+        let cursor = if cursor.trim().is_empty() {
+            None
+        } else {
+            let (created_at, image_id) = cursor
+                .split_once(':')
+                .and_then(|(created, id)| {
+                    created
+                        .parse::<i64>()
+                        .ok()
+                        .filter(|_| !id.is_empty())
+                        .map(|created| (created, id.to_string()))
+                })
+                .ok_or_else(|| invalid_param("invalid cursor"))?;
+            Some((created_at, image_id))
+        };
+        let mut sql = String::from(
+            "SELECT * FROM media_images WHERE bot_id=? AND deleted_at=0 AND expires_at>?",
+        );
+        let mut params: Vec<V> = vec![V::from(bot_id), V::from(now)];
+        if let Some((created_at, image_id)) = &cursor {
+            sql.push_str(" AND (created_at<? OR (created_at=? AND id<?))");
+            params.push(V::from(*created_at));
+            params.push(V::from(*created_at));
+            params.push(V::from(image_id));
+        }
+        sql.push_str(" ORDER BY created_at DESC, id DESC LIMIT ?");
+        params.push(V::from(MEDIA_IMAGE_PAGE_SIZE + 1));
+        let mut rows = self.db.all(&sql, &params)?;
+        let has_more = rows.len() as i64 > MEDIA_IMAGE_PAGE_SIZE;
+        if has_more {
+            rows.truncate(MEDIA_IMAGE_PAGE_SIZE as usize);
+        }
+        let next_cursor = if has_more {
+            rows.last()
+                .map(|row| format!("{}:{}", i(row, "created_at"), s(row, "id")))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        Ok(json!({
+            "images": rows.iter().map(|row| self.media_image_out(row)).collect::<Vec<_>>(),
+            "next_cursor": next_cursor,
+            "total": total,
+        }))
+    }
+
+    pub fn delete_media_image(&self, bot_id: &str, image_id: &str) -> MqsResult<()> {
+        let now = self.clock.now_ms();
+        let row = self
+            .db
+            .one(
+                "SELECT * FROM media_images WHERE id=? AND bot_id=?",
+                &p![image_id, bot_id],
+            )?
+            .ok_or_else(|| media_image_missing(format!("image {image_id} does not exist")))?;
+        if i(&row, "deleted_at") != 0 || i(&row, "expires_at") <= now {
+            return Err(media_image_missing(format!(
+                "image {image_id} does not exist or has already been deleted"
+            )));
+        }
+        self.db.execute(
+            "UPDATE media_images SET deleted_at=? WHERE id=?",
+            &p![now, image_id],
+        )?;
+        Ok(())
+    }
+
+    /// 发送消息时按文件头嗅探图片格式，并与 prepare 声明的 content_type 比对。
+    /// 官方只做格式检查、不做完整解码（`complete` 本身也允许内容不合法）。
+    pub fn validate_media_image_content(&self, image: &Row) -> MqsResult<()> {
+        let media_hash = s(image, "media_hash");
+        let Some(media) = self.media_by_hash(&media_hash)? else {
+            return Err(media_internal(
+                "the media object referenced by this image is missing",
+            ));
+        };
+        let path = self.paths.media().join(s(&media, "hash"));
+        let mut head = [0u8; 16];
+        let read = {
+            use std::io::Read;
+            let mut file = std::fs::File::open(&path).map_err(|_| {
+                media_internal("the media object referenced by this image is missing")
+            })?;
+            file.read(&mut head).unwrap_or(0)
+        };
+        let sniffed = sniff_mime(&head[..read]);
+        let declared = s(image, "content_type");
+        if sniffed != declared {
+            return Err(media_format_unsupported(format!(
+                "the uploaded bytes are not {declared} (detected {sniffed})"
+            )));
+        }
+        Ok(())
+    }
+
+    /// 控制台渲染 Markdown 用：把消息里出现的 qqbot-media 引用映射成可访问的预览 URL。
+    pub fn media_images_in_markdown(&self, bot_id: &str, source: &str) -> MqsResult<Vec<Value>> {
+        let mut out = Vec::new();
+        for token in crate::messages::media_image_tokens(source) {
+            let Some(row) = self.db.one(
+                "SELECT * FROM media_images WHERE bot_id=? AND token=?",
+                &p![bot_id, &token],
+            )?
+            else {
+                continue;
+            };
+            out.push(json!({
+                "token": token,
+                "url": format!("qqbot-media://image/v1/{}", s(&row, "token")),
+                "image_id": s(&row, "id"),
+                "file_name": s(&row, "file_name"),
+                "preview_url": self.absolute(&format!("/media/{}", s(&row, "media_hash"))),
+                "expires_at": i(&row, "expires_at") / 1000,
+            }));
+        }
+        Ok(out)
     }
 
     // ------------------------------------------------------------------ debug frames

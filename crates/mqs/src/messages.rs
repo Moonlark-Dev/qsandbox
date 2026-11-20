@@ -4,13 +4,14 @@ use serde_json::{json, Map, Value};
 
 use crate::db::{b, conn_exec, conn_insert, conn_one, i, json_col, s};
 use crate::error::{
-    bot_offline, duplicate_reply, internal, invalid_param, message_not_found, no_permission,
-    passive_window_expired, quota_exhausted, MqsResult,
+    bot_offline, duplicate_reply, internal, invalid_param, media_image_expired,
+    media_reference_invalid, message_not_found, no_permission, passive_window_expired,
+    quota_exhausted, MqsResult,
 };
 use crate::ids::{new_event_id, new_msg_id, openid_for, union_openid_for};
 use crate::p;
 use crate::text_tags::{self, TextTag};
-use crate::world::{World, BOT_SCOPE_C2C, BOT_SCOPE_GROUP, BOT_SCOPE_MEDIA};
+use crate::world::{World, BOT_SCOPE_C2C, BOT_SCOPE_GROUP, BOT_SCOPE_MEDIA, MEDIA_IMAGE_TTL_MS};
 
 struct Delivery {
     bot_id: String,
@@ -502,6 +503,12 @@ impl World {
         }
 
         let now = self.clock.now_ms();
+        // Markdown 里引用的素材图片必须先通过归属/时效校验；发送成功后再顺延
+        // 90 天滑动有效期（在写消息的同一事务里更新），失败不改变任何状态。
+        let image_ids = match markdown_source(body) {
+            Some(source) => self.resolve_media_image_refs(bot_id, source)?,
+            None => Vec::new(),
+        };
         let mut rate_result: Option<Value> = None;
         let msg_id_in = body.get("msg_id").and_then(|v| v.as_str()).unwrap_or("");
         let event_id_in = body.get("event_id").and_then(|v| v.as_str()).unwrap_or("");
@@ -738,6 +745,13 @@ impl World {
                     sent_at
                 ],
             )?;
+            for image_id in &image_ids {
+                conn_exec(
+                    conn,
+                    "UPDATE media_images SET expires_at=? WHERE id=? AND bot_id=?",
+                    &p![now + MEDIA_IMAGE_TTL_MS, image_id, bot_id],
+                )?;
+            }
             Ok(seq)
         })?;
         let message_row = self
@@ -972,6 +986,33 @@ impl World {
         out.insert("at_bots".into(), json!(at_bots));
         out.insert("unsupport_tips".into(), Value::from(unsupport_tips));
         Ok(Value::Object(out))
+    }
+
+    /// 校验 Markdown 里引用的 `qqbot-media://image/v1/<token>`：token 必须属于
+    /// 当前 Bot 且图片未删除、未过期。返回 image_id，供发送成功后顺延有效期。
+    fn resolve_media_image_refs(&self, bot_id: &str, source: &str) -> MqsResult<Vec<String>> {
+        let now = self.clock.now_ms();
+        let mut image_ids = Vec::new();
+        for token in media_image_tokens(source) {
+            let Some(row) = self.db.one(
+                "SELECT * FROM media_images WHERE bot_id=? AND token=?",
+                &p![bot_id, &token],
+            )?
+            else {
+                return Err(media_reference_invalid(format!(
+                    "qqbot-media://image/v1/{token} is invalid or belongs to another bot"
+                )));
+            };
+            if i(&row, "deleted_at") != 0 || i(&row, "expires_at") <= now {
+                return Err(media_image_expired(format!(
+                    "qqbot-media://image/v1/{token} has expired or been deleted"
+                )));
+            }
+            // 官方在发送时检查实际内容是否为声明的图片格式（complete 不做）。
+            self.validate_media_image_content(&row)?;
+            image_ids.push(s(&row, "id"));
+        }
+        Ok(image_ids)
     }
 
     /// 解析 Markdown 里的 `<qqbot-at-user id="…"/>`，把 per-bot openid 翻成昵称。
@@ -1231,7 +1272,7 @@ fn validate_send_body(body: &Value) -> MqsResult<()> {
 
 /// 出站消息里可展示的 Markdown 正文：官方字段是 `markdown.content`；
 /// `msg_type=2` 且正文直接放在 `content` 里的写法也兼容（部分客户端如此）。
-fn markdown_source(raw: &Value) -> Option<&str> {
+pub(crate) fn markdown_source(raw: &Value) -> Option<&str> {
     raw.get("markdown")
         .and_then(|markdown| markdown.get("content"))
         .and_then(Value::as_str)
@@ -1242,4 +1283,91 @@ fn markdown_source(raw: &Value) -> Option<&str> {
                 .flatten()
                 .filter(|content| !content.is_empty())
         })
+}
+
+/// 从 Markdown 的图片目标里提取 `qqbot-media://image/v1/<token>` 的 token。
+/// 只认 `![…](…)`，且跳过 code span/fenced block；正文里裸写该前缀不算一次引用。
+pub(crate) fn media_image_tokens(source: &str) -> Vec<String> {
+    const PREFIX: &str = "qqbot-media://image/v1/";
+    let text = strip_markdown_code(source);
+    let mut out: Vec<String> = Vec::new();
+    let mut search = 0;
+    while let Some(offset) = text[search..].find("![") {
+        let alt_start = search + offset + 2;
+        let Some(relative) = text[alt_start..].find("](") else {
+            break;
+        };
+        let url_start = alt_start + relative + 2;
+        let rest = text[url_start..].trim_start();
+        if let Some(after) = rest.strip_prefix(PREFIX) {
+            let end = after
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+                .unwrap_or(after.len());
+            let token = &after[..end];
+            if !token.is_empty() && !out.iter().any(|existing| existing == token) {
+                out.push(token.to_string());
+            }
+        }
+        search = url_start;
+    }
+    out
+}
+
+/// 去掉 fenced code block 与行内 code span：GUI 不会把其中的 `![…](…)` 当图片，
+/// 服务端也不应因此校验/顺延有效期。
+fn strip_markdown_code(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut index = 0;
+    while index < source.len() {
+        if source[index..].starts_with("```") {
+            index += 3;
+            if let Some(end) = source[index..].find("```") {
+                index += end + 3;
+            } else {
+                index = source.len();
+            }
+            out.push(' ');
+            continue;
+        }
+        if source.as_bytes()[index] == b'`' {
+            if let Some(end) = source[index + 1..].find('`') {
+                index += end + 2;
+            } else {
+                out.push_str(&source[index..]);
+                break;
+            }
+            out.push(' ');
+            continue;
+        }
+        let ch = source[index..].chars().next().unwrap();
+        out.push(ch);
+        index += ch.len_utf8();
+    }
+    out
+}
+
+#[cfg(test)]
+mod media_image_token_tests {
+    use super::media_image_tokens;
+
+    #[test]
+    fn extracts_only_image_targets() {
+        let source = "![K线 #800px #400px](qqbot-media://image/v1/ABCdef_123) \
+                      and [link](qqbot-media://image/v1/link) \
+                      bare qqbot-media://image/v1/ignored";
+        assert_eq!(media_image_tokens(source), vec!["ABCdef_123".to_string()]);
+    }
+
+    #[test]
+    fn ignores_code_spans_and_fences() {
+        let source =
+            "`![a](qqbot-media://image/v1/inline)`\n```md\n![b](qqbot-media://image/v1/fence)\n```\n![c](qqbot-media://image/v1/real)";
+        assert_eq!(media_image_tokens(source), vec!["real".to_string()]);
+    }
+
+    #[test]
+    fn deduplicates_tokens() {
+        let source = "![a](qqbot-media://image/v1/t) ![b](qqbot-media://image/v1/t)";
+        assert_eq!(media_image_tokens(source), vec!["t".to_string()]);
+    }
 }

@@ -39,6 +39,23 @@ pub fn catalog(code: i64) -> (u16, &'static str) {
         40063 => (400, "captcha / message audit required"),
         42900 => (429, "rate limit exceeded"),
         40184001 => (403, "no friend relation with this user"),
+        40035001 => (400, "unsupported image format"),
+        40035002 => (400, "image exceeds the size limit"),
+        40035003 => (
+            400,
+            "upload task not found, expired, or not owned by this bot",
+        ),
+        40035006 => (500, "server error while processing the image"),
+        40035007 => (400, "media image quota exceeded"),
+        40035008 => (404, "image not found or already deleted"),
+        40035009 => (
+            400,
+            "image expired or deleted; the qqbot-media reference is no longer usable",
+        ),
+        40035010 => (
+            403,
+            "invalid qqbot-media reference, or it belongs to another bot",
+        ),
         50001 => (500, "upstream service error"),
         404 => (404, "endpoint is not exposed by this sandbox"),
         _ => (500, "internal error"),
@@ -200,6 +217,38 @@ pub fn no_friend_relation() -> ApiError {
     ApiError::new(40184001, "no friend relation: user and bot are not friends").with_hint(
         "QSandbox 没有好友关系模型：只要这个 openid 曾由该 Bot 生成过（openid_map 里有记录）就会返回用户信息",
     )
+}
+
+pub fn media_format_unsupported(message: impl Into<String>) -> ApiError {
+    ApiError::new(40035001, message)
+}
+
+pub fn media_too_large(message: impl Into<String>) -> ApiError {
+    ApiError::new(40035002, message)
+}
+
+pub fn media_upload_invalid(message: impl Into<String>) -> ApiError {
+    ApiError::new(40035003, message)
+}
+
+pub fn media_internal(message: impl Into<String>) -> ApiError {
+    ApiError::new(40035006, message)
+}
+
+pub fn media_quota_exceeded(message: impl Into<String>) -> ApiError {
+    ApiError::new(40035007, message)
+}
+
+pub fn media_image_missing(message: impl Into<String>) -> ApiError {
+    ApiError::new(40035008, message)
+}
+
+pub fn media_image_expired(message: impl Into<String>) -> ApiError {
+    ApiError::new(40035009, message)
+}
+
+pub fn media_reference_invalid(message: impl Into<String>) -> ApiError {
+    ApiError::new(40035010, message)
 }
 
 pub fn no_interface_access() -> ApiError {

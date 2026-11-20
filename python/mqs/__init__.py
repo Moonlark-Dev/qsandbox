@@ -5,4 +5,4 @@ package exists so that QQ SDKs which hardcode their endpoints (botpy) can be
 pointed at a running sandbox without editing the SDK.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.5.0"

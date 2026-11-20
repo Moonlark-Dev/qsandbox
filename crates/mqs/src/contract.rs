@@ -7,7 +7,7 @@
 
 use serde_json::{json, Value};
 
-pub const DOC_DATE: &str = "2026-11-19";
+pub const DOC_DATE: &str = "2026-11-20";
 
 #[derive(Debug, Clone)]
 pub struct Endpoint {
@@ -121,7 +121,7 @@ pub static REGISTRY: &[Endpoint] = &[
         "L0",
         "message",
         ["group_message"],
-        [10001, 40034, 40040, 40054, 40055, 40056, 40057],
+        [10001, 40034, 40040, 40054, 40055, 40056, 40057, 40035006, 40035009, 40035010],
         "full",
         ""
     ),
@@ -134,7 +134,7 @@ pub static REGISTRY: &[Endpoint] = &[
         "L0",
         "message",
         ["c2c_message"],
-        [10001, 40034, 40040, 40054, 40055, 40056, 40057],
+        [10001, 40034, 40040, 40054, 40055, 40056, 40057, 40035006, 40035009, 40035010],
         "full",
         ""
     ),
@@ -280,6 +280,71 @@ pub static REGISTRY: &[Endpoint] = &[
         [],
         "full",
         "MQS 自建入口，非 QQ 接口"
+    ),
+    ep!(
+        "media_image.prepare",
+        "POST",
+        "/v2/media-images/prepare",
+        "素材管理：申请图片上传（预签名 URL）",
+        "bot",
+        "L1",
+        "media",
+        [],
+        [40035001, 40035002, 40035007],
+        "full",
+        "单张 ≤10MB、png/jpeg/gif/webp；upload_id 4 小时有效、预签名 URL 1 小时；单 Bot 默认 100 张；同一 sha1 未过期时复用 upload_id；官方页面未声明 scope，沙箱不额外校验 media scope"
+    ),
+    ep!(
+        "media_image.upload",
+        "PUT",
+        "/v2/media-images/uploads/{upload_id}",
+        "素材管理：直传图片二进制（模拟 COS 预签名 PUT）",
+        "none",
+        "L1",
+        "media",
+        [],
+        [40035001, 40035002, 40035003],
+        "full",
+        "MQS 用 upload_id + sign 模拟 COS 预签名 URL；Content-Type 必须与 prepare 一致，响应 ETag 即文件 MD5"
+    ),
+    ep!(
+        "media_image.complete",
+        "POST",
+        "/v2/media-images/complete",
+        "素材管理：完成上传，返回 qqbot-media 引用",
+        "bot",
+        "L1",
+        "media",
+        [],
+        [40035003, 40035006, 40035007],
+        "full",
+        "完成时校验上传返回的 md5/ETag；返回 image_id、url、ttl（90 天）、preview_url"
+    ),
+    ep!(
+        "media_image.list",
+        "GET",
+        "/v2/media-images",
+        "素材管理：查询有效图片（游标分页）",
+        "bot",
+        "L1",
+        "media",
+        [],
+        [10001],
+        "full",
+        "按上传时间倒序；每页 20 张；next_cursor 为空表示末页；total 与数量上限同口径"
+    ),
+    ep!(
+        "media_image.delete",
+        "DELETE",
+        "/v2/media-images/{image_id}/delete",
+        "素材管理：删除图片并释放数量配额",
+        "bot",
+        "L1",
+        "media",
+        [],
+        [40035008],
+        "full",
+        "删除后引用立即失效；已发送消息不受影响（沙箱保留媒体副本）"
     ),
     ep!(
         "group.info",

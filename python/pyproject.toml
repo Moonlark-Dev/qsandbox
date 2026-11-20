@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mqs-compat"
-version = "0.4.0"
+version = "0.5.0"
 description = "Point the real QQ SDKs (botpy) at a running QSandbox — Python-only compatibility shim"
 readme = "README.md"
 requires-python = ">=3.9"

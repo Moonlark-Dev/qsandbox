@@ -136,6 +136,7 @@ pub fn default_settings() -> Map<String, Value> {
         ("passive_reply_limit_group", Value::from(5)),
         ("active_c2c_require_friend", Value::Bool(false)),
         ("allow_remote_media", Value::Bool(false)),
+        ("media_image_limit", Value::from(100)),
         ("language", Value::String("zh-CN".into())),
         ("theme", Value::String("auto".into())),
         ("telemetry", Value::Bool(false)),

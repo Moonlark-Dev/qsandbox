@@ -96,6 +96,7 @@ mqs mcp                                 # stdio MCP server（10 个工具）
 | **用户资料** | `GET /v2/users/{openid}/info`：昵称、头像、`union_openid`、主动消息开关（10 QPS，未知 openid 返回 40184001） |
 | **主动消息** | Bot 级 + 群级开关；未认证/已认证两档滑动窗口限流；单关系 20/min；每日 1000 条配额（40055） |
 | **媒体** | `file_type` 1/2/3、url / multipart / base64 / 分片上传（prepare → part → finish）、内容哈希寻址下载 |
+| **素材管理** | `media-images` prepare → 预签名 PUT → complete → Markdown 引用（`qqbot-media://`）、游标列表、删除；100 张上限、90 天滑动过期、上传任务 4 小时 |
 | **事件投递** | WebSocket 与 Webhook 双通道、Ed25519 握手与签名、事件溯源（RESUME 补发） |
 | **可观测** | 双向 HTTP/WS 帧、事件流、限流拒绝、吞吐、DB 大小、覆盖率实时统计、虚拟时钟 |
 | **Agent** | CLI（`--json` / 稳定退出码）、MCP stdio（10 个工具）、10 个 YAML 场景 + JUnit/TAP |
