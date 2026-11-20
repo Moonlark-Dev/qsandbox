@@ -112,7 +112,7 @@ mqs mcp                                 # stdio MCP server（10 个工具）
 | **事件投递** | WebSocket 与 Webhook 双通道、Ed25519 握手与签名、事件溯源（RESUME 补发） |
 | **可观测** | 双向 HTTP/WS 帧、事件流、限流拒绝、吞吐、DB 大小、覆盖率实时统计、虚拟时钟 |
 | **Agent** | CLI（`--json` / 稳定退出码）、MCP stdio（10 个工具）、10 个 YAML 场景 + JUnit/TAP |
-| **GUI** | 状态 / 配置 / 聊天 / 调试器 / 设置；规则引擎、群管理、文件粘贴拖拽、账号切换快捷键 |
+| **GUI** | 状态 / 配置 / 聊天 / 素材 / 调试器 / 设置；规则引擎、群管理、素材面板（预览 / 改名 / 改有效期 / 删除）、文件粘贴拖拽、账号切换快捷键 |
 | **桌面端** | Tauri v2 安装包（Linux deb/AppImage、Windows exe/msi、macOS dmg），内嵌服务，无 sidecar |
 
 ![桌面端状态页](docs/screenshots/desktop-status.png)

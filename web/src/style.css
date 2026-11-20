@@ -368,3 +368,17 @@ table.table { width: 100%; border-collapse: collapse; }
   object-fit: cover;
   border-radius: 5px;
 }
+
+/* media panel (素材管理) */
+.media-thumb {
+  width: 44px; height: 44px; object-fit: cover; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--panel-3); cursor: zoom-in;
+}
+.media-preview {
+  width: 220px; max-height: 260px; object-fit: contain; flex: 0 0 220px;
+  border-radius: 10px; border: 1px solid var(--border); background: var(--panel-3); cursor: zoom-in;
+}
+.media-token {
+  font-family: var(--mono); font-size: 11px; color: var(--faint);
+  word-break: break-all; line-height: 1.4;
+}

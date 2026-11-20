@@ -175,6 +175,7 @@ HTTP 状态：参数/语义 400，鉴权 401，权限/白名单 403，不存在 
 | CRUD | `/groups/{id}/blacklist` `/join-requests` | 黑名单、入群申请与审批 |
 | CRUD | `/bots` `.../token` `.../rotate-secret` `.../webhook` | Bot、token、回调 |
 | POST | `/media` | 控制台上传图片/视频/音频（富媒体消息用） |
+| GET/PATCH/DELETE | `/media-images` `/media-images/{image_id}` | 素材面板：跨 Bot 列表（`?bot_id=&include=valid\|expired\|all`，含 `counts`/`limit`）、改名、改有效期、软删除 |
 | GET | `/conversations` `/conversations/{id}/messages` | 会话与消息分页 |
 | POST | `/chat/send` | 以某用户身份发言（触发网关事件） |
 | POST | `/messages/{id}/click` | 模拟点击按钮（指令/回调/链接） |
@@ -194,11 +195,13 @@ MCP stdio 提供 10 个工具：`get_status`、`list_conversations`、`read_mess
 
 ## 6. 前端（Vue 3 + Vite + TS）
 
-- 侧栏：状态 / 配置 / 聊天 / 调试器；设置右上角。**没有频道页**。
+- 侧栏：状态 / 配置 / 聊天 / 素材 / 调试器；设置右上角。**没有频道页**。
 - 状态：接入信息（base_url/ws_url/appid/token）、连接数、吞吐、限流拒绝、DB 大小、覆盖率、profile 切换。
 - 配置：用户/群/Bot 三张表、随机生成器、限流档位、白名单/暴露开关、规则引擎、Bot 接入配置（nonebot）。
 - 聊天：三栏（会话/消息流/操作面板）；账号切换 `Ctrl+Tab`、`Ctrl+1..9`；群管理面板；
   文件选择、粘贴、拖拽上传。
+- 素材：`/v2/media-images` 上传的图片（跨 Bot、按 Bot 过滤、搜索）、缩略图与详情预览、
+  复制 Markdown 引用、改名 / 改到期时间（面板扩展）、软删除；`include` 可查看已过期/已删除。
 - 调试器：帧流（WS 实时）、按 Bot/类型过滤、双向原始 JSON、只看错误/隐藏心跳。
 - 主题：深色优先，遵循 `prefers-color-scheme`；文案 zh-CN。
 

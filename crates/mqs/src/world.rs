@@ -2346,6 +2346,166 @@ impl World {
         Ok(())
     }
 
+    // ---------------------------------------------------------- material images (control panel)
+    // 下面几个方法只服务控制台的素材面板（`/_mqs/media-images`）。官方没有「修改
+    // 素材」接口：Bot 只能 prepare → PUT → complete → 查询 / 删除。沙箱把改名、
+    // 改有效期、跨 Bot 列表放出来，是为了调试文件头嗅探、90 天滑动过期与配额。
+
+    fn admin_media_image_row(&self, image_id: &str) -> MqsResult<Row> {
+        self.db
+            .one("SELECT * FROM media_images WHERE id=?", &p![image_id])?
+            .ok_or_else(|| media_image_missing(format!("image {image_id} does not exist")))
+    }
+
+    pub fn admin_media_image_out(&self, row: &Row) -> Value {
+        let now = self.clock.now_ms();
+        let token = s(row, "token");
+        let file_name = s(row, "file_name");
+        let deleted_at = i(row, "deleted_at");
+        let expires_at = i(row, "expires_at");
+        json!({
+            "image_id": s(row, "id"),
+            "bot_id": s(row, "bot_id"),
+            "token": token,
+            "url": format!("qqbot-media://image/v1/{token}"),
+            "file_name": file_name,
+            "content_type": s(row, "content_type"),
+            "size": i(row, "size"),
+            "md5": s(row, "md5"),
+            "sha1": s(row, "sha1"),
+            "preview_url": self.absolute(&format!("/media/{}", s(row, "media_hash"))),
+            "created_at": i(row, "created_at") / 1000,
+            "expires_at": expires_at / 1000,
+            "deleted_at": if deleted_at == 0 { Value::Null } else { Value::from(deleted_at / 1000) },
+            "expired": deleted_at == 0 && expires_at <= now,
+            "deleted": deleted_at != 0,
+            "markdown": format!("![{file_name}](qqbot-media://image/v1/{token})"),
+        })
+    }
+
+    /// 面板列表：默认只列有效图片，`include_expired` / `include_deleted` 放开
+    /// 过期与软删除的记录。`counts` 始终按同一 Bot 条件统计全部状态，不受过滤影响。
+    pub fn admin_list_media_images(
+        &self,
+        bot_id: Option<&str>,
+        include_expired: bool,
+        include_deleted: bool,
+    ) -> MqsResult<Value> {
+        let now = self.clock.now_ms();
+        let mut where_sql = String::from(" WHERE 1=1");
+        let mut params: Vec<V> = Vec::new();
+        if let Some(bot_id) = bot_id {
+            where_sql.push_str(" AND bot_id=?");
+            params.push(V::from(bot_id));
+        }
+        if !include_deleted {
+            where_sql.push_str(" AND deleted_at=0");
+        }
+        if !include_expired {
+            where_sql.push_str(" AND expires_at>?");
+            params.push(V::from(now));
+        }
+        let rows = self.db.all(
+            &format!("SELECT * FROM media_images{where_sql} ORDER BY created_at DESC, id DESC"),
+            &params,
+        )?;
+
+        let mut count_params: Vec<V> = vec![V::from(now), V::from(now)];
+        let mut count_where = String::new();
+        if let Some(bot_id) = bot_id {
+            count_where.push_str(" WHERE bot_id=?");
+            count_params.push(V::from(bot_id));
+        }
+        let counts = self
+            .db
+            .one(
+                &format!(
+                    "SELECT COUNT(*) AS total, \
+                     COALESCE(SUM(CASE WHEN deleted_at=0 AND expires_at>? THEN 1 ELSE 0 END),0) AS valid, \
+                     COALESCE(SUM(CASE WHEN deleted_at=0 AND expires_at<=? THEN 1 ELSE 0 END),0) AS expired, \
+                     COALESCE(SUM(CASE WHEN deleted_at<>0 THEN 1 ELSE 0 END),0) AS deleted \
+                     FROM media_images{count_where}"
+                ),
+                &count_params,
+            )?
+            .unwrap_or_default();
+        Ok(json!({
+            "items": rows.iter().map(|row| self.admin_media_image_out(row)).collect::<Vec<_>>(),
+            "counts": {
+                "total": i(&counts, "total"),
+                "valid": i(&counts, "valid"),
+                "expired": i(&counts, "expired"),
+                "deleted": i(&counts, "deleted"),
+            },
+            "limit": self.media_image_limit(),
+        }))
+    }
+
+    /// 面板改名 / 改到期时间（Unix 秒）。改名必须是同类扩展名，否则预览与发送时
+    /// 的文件头嗅探会对不上；改有效期允许早于现在（用来制造过期态）。
+    pub fn admin_update_media_image(
+        &self,
+        image_id: &str,
+        file_name: Option<&str>,
+        expires_at: Option<i64>,
+    ) -> MqsResult<Value> {
+        let row = self.admin_media_image_row(image_id)?;
+        if i(&row, "deleted_at") != 0 {
+            return Err(media_image_missing(format!(
+                "image {image_id} has been deleted"
+            )));
+        }
+        let content_type = s(&row, "content_type");
+        let mut next_name = s(&row, "file_name");
+        if let Some(name) = file_name {
+            let name = name.trim();
+            if name.is_empty() {
+                return Err(invalid_param("file_name must not be empty"));
+            }
+            let extension_type = media_image_type_for_name(name).ok_or_else(|| {
+                media_format_unsupported("file_name must end with .png, .jpg, .jpeg, .gif or .webp")
+            })?;
+            if extension_type != content_type {
+                return Err(media_format_unsupported(format!(
+                    "file_name extension must match the image content_type {content_type}"
+                )));
+            }
+            next_name = name.to_string();
+        }
+        let mut next_expiry = i(&row, "expires_at");
+        if let Some(seconds) = expires_at {
+            if seconds <= 0 {
+                return Err(invalid_param(
+                    "expires_at must be a positive unix timestamp in seconds",
+                ));
+            }
+            next_expiry = seconds * 1000;
+        }
+        self.db.execute(
+            "UPDATE media_images SET file_name=?, expires_at=? WHERE id=?",
+            &p![&next_name, next_expiry, image_id],
+        )?;
+        let row = self.admin_media_image_row(image_id)?;
+        Ok(self.admin_media_image_out(&row))
+    }
+
+    /// 面板删除：不校验 Bot，也允许删已过期的图片（调试完清理现场用），只拒绝
+    /// 重复删除；软删除与官方 `DELETE /v2/media-images/{id}/delete` 语义一致。
+    pub fn admin_delete_media_image(&self, image_id: &str) -> MqsResult<Value> {
+        let row = self.admin_media_image_row(image_id)?;
+        if i(&row, "deleted_at") != 0 {
+            return Err(media_image_missing(format!(
+                "image {image_id} has already been deleted"
+            )));
+        }
+        self.db.execute(
+            "UPDATE media_images SET deleted_at=? WHERE id=?",
+            &p![self.clock.now_ms(), image_id],
+        )?;
+        let row = self.admin_media_image_row(image_id)?;
+        Ok(self.admin_media_image_out(&row))
+    }
+
     /// 发送消息时按文件头嗅探图片格式，并与 prepare 声明的 content_type 比对。
     /// 官方只做格式检查、不做完整解码（`complete` 本身也允许内容不合法）。
     pub fn validate_media_image_content(&self, image: &Row) -> MqsResult<()> {

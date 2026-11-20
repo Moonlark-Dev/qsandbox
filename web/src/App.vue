@@ -6,6 +6,7 @@ import TextPrompt from './components/TextPrompt.vue'
 import StatusView from './views/StatusView.vue'
 import ConfigView from './views/ConfigView.vue'
 import ChatView from './views/ChatView.vue'
+import MediaView from './views/MediaView.vue'
 import DebugView from './views/DebugView.vue'
 import SettingsPanel from './views/SettingsPanel.vue'
 
@@ -13,6 +14,7 @@ const tabs = [
   { id: 'status', label: '状态', icon: '◎' },
   { id: 'config', label: '配置', icon: '⚙' },
   { id: 'chat', label: '聊天', icon: '💬' },
+  { id: 'media', label: '素材', icon: '🖼' },
   { id: 'debug', label: '调试器', icon: '⌘' },
 ] as const
 
@@ -20,6 +22,7 @@ const views: Record<string, any> = {
   status: StatusView,
   config: ConfigView,
   chat: ChatView,
+  media: MediaView,
   debug: DebugView,
 }
 

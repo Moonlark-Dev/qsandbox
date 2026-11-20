@@ -775,3 +775,178 @@ async fn expired_material_image_releases_quota() {
     let listed = list_images(&test, &authorization, "").await;
     assert_eq!(listed["total"], 1);
 }
+
+// ---------------------------------------------------------------- control panel (`/_mqs/media-images`)
+
+async fn panel_list(test: &Test, query: &str) -> Value {
+    test.ctl_ok("GET", &format!("/_mqs/media-images{query}"), None)
+        .await
+}
+
+#[tokio::test]
+async fn control_panel_lists_edits_and_deletes_media_images() {
+    let test = Test::start().await;
+    let authorization = test.bot_headers("10000").await;
+    let image = create_image(&test, &authorization, "panel.png", PNG).await;
+    let image_id = image["image_id"].as_str().unwrap().to_string();
+
+    let listed = panel_list(&test, "").await;
+    assert_eq!(
+        listed["counts"],
+        json!({"total": 1, "valid": 1, "expired": 0, "deleted": 0})
+    );
+    assert_eq!(listed["limit"], 100);
+    let items = listed["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    let item = &items[0];
+    assert_eq!(item["image_id"], image_id);
+    assert_eq!(item["bot_id"], "10000");
+    assert_eq!(item["file_name"], "panel.png");
+    assert_eq!(item["content_type"], "image/png");
+    assert_eq!(item["size"].as_i64().unwrap(), PNG.len() as i64);
+    assert_eq!(item["md5"], md5_hex(PNG));
+    assert_eq!(item["sha1"], SHA1);
+    assert_eq!(item["expired"], false);
+    assert_eq!(item["deleted"], false);
+    assert_eq!(item["deleted_at"], Value::Null);
+    assert!(item["preview_url"].as_str().unwrap().starts_with(&test.sim));
+    assert_eq!(
+        item["markdown"].as_str().unwrap(),
+        format!("![panel.png]({})", image["url"].as_str().unwrap())
+    );
+
+    // 改名 + 顺延到期：官方的 Bot 视角列表立刻读到新文件名与新有效期。
+    let expires_at = item["expires_at"].as_i64().unwrap() + 3600;
+    let patched = test
+        .ctl_ok(
+            "PATCH",
+            &format!("/_mqs/media-images/{image_id}"),
+            Some(json!({"file_name": "renamed.png", "expires_at": expires_at})),
+        )
+        .await;
+    assert_eq!(patched["file_name"], "renamed.png");
+    assert_eq!(patched["expires_at"], expires_at);
+    assert_eq!(patched["expired"], false);
+    let listed = list_images(&test, &authorization, "").await;
+    assert_eq!(listed["images"][0]["file_name"], "renamed.png");
+    assert_eq!(listed["images"][0]["expires_at"], expires_at);
+
+    // 改造：扩展名与 content_type 不匹配 → 40035001；空文件名 → 10001。
+    let (status, body) = test
+        .ctl(
+            "PATCH",
+            &format!("/_mqs/media-images/{image_id}"),
+            Some(json!({"file_name": "renamed.jpg"})),
+        )
+        .await;
+    assert_eq!(status, 400);
+    assert_eq!(body["code"], 40035001);
+    let (status, body) = test
+        .ctl(
+            "PATCH",
+            &format!("/_mqs/media-images/{image_id}"),
+            Some(json!({"file_name": "  "})),
+        )
+        .await;
+    assert_eq!(status, 400);
+    assert_eq!(body["code"], 10001);
+
+    // 面板删除：默认列表看不到，include=all 能看到 deleted 标记。
+    let deleted = test
+        .ctl_ok("DELETE", &format!("/_mqs/media-images/{image_id}"), None)
+        .await;
+    assert_eq!(deleted["deleted"], true);
+    assert!(deleted["deleted_at"].as_i64().is_some());
+    let listed = panel_list(&test, "").await;
+    assert_eq!(listed["items"].as_array().unwrap().len(), 0);
+    assert_eq!(listed["counts"]["deleted"], 1);
+    let listed = panel_list(&test, "?include=all").await;
+    assert_eq!(listed["items"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["items"][0]["deleted"], true);
+
+    // 重复删除、修改已删除的素材、未知 id 都是 404 + 40035008。
+    for (method, body) in [
+        ("DELETE", None),
+        ("PATCH", Some(json!({"file_name": "again.png"}))),
+    ] {
+        let (status, payload) = test
+            .ctl(method, &format!("/_mqs/media-images/{image_id}"), body)
+            .await;
+        assert_eq!(status, 404, "{method}: {payload}");
+        assert_eq!(payload["code"], 40035008);
+    }
+    let (status, body) = test
+        .ctl("DELETE", "/_mqs/media-images/unknown_id", None)
+        .await;
+    assert_eq!(status, 404);
+    assert_eq!(body["code"], 40035008);
+}
+
+#[tokio::test]
+async fn control_panel_filters_bots_and_shows_expired_images() {
+    let test = Test::start().await;
+    let authorization = test.bot_headers("10000").await;
+    let image = create_image(&test, &authorization, "expire.png", PNG).await;
+    let image_id = image["image_id"].as_str().unwrap().to_string();
+
+    // 第二个 Bot 的素材不能被 10000 的过滤条件带出来。
+    test.ctl_ok(
+        "POST",
+        "/_mqs/bots",
+        Some(json!({"app_id": "20000", "name": "第二个 Bot"})),
+    )
+    .await;
+    let authorization2 = test.bot_headers("20000").await;
+    let other = create_image(&test, &authorization2, "other.png", PNG).await;
+    let other_id = other["image_id"].as_str().unwrap().to_string();
+
+    let listed = panel_list(&test, "").await;
+    assert_eq!(listed["items"].as_array().unwrap().len(), 2);
+    assert_eq!(listed["counts"]["valid"], 2);
+
+    let listed = panel_list(&test, "?bot_id=20000").await;
+    let items = listed["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["image_id"], other_id);
+    assert_eq!(
+        listed["counts"],
+        json!({"total": 1, "valid": 1, "expired": 0, "deleted": 0})
+    );
+
+    let listed = panel_list(&test, "?bot_id=99999").await;
+    assert_eq!(listed["items"].as_array().unwrap().len(), 0);
+    assert_eq!(listed["counts"]["total"], 0);
+
+    // 把素材改到过去 → 默认列表隐藏，include=expired 能看到 expired 标记。
+    let current = panel_list(&test, "?bot_id=10000").await;
+    let created = current["items"][0]["created_at"].as_i64().unwrap();
+    test.ctl_ok(
+        "PATCH",
+        &format!("/_mqs/media-images/{image_id}"),
+        Some(json!({"expires_at": created})),
+    )
+    .await;
+    let listed = panel_list(&test, "?bot_id=10000").await;
+    assert_eq!(listed["items"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        listed["counts"],
+        json!({"total": 1, "valid": 0, "expired": 1, "deleted": 0})
+    );
+    let listed = panel_list(&test, "?bot_id=10000&include=expired").await;
+    let items = listed["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["expired"], true);
+
+    // 官方接口拒绝删除已过期图片（40035008），面板允许——调试完清理现场。
+    test.ctl_ok("DELETE", &format!("/_mqs/media-images/{image_id}"), None)
+        .await;
+    let listed = panel_list(&test, "?bot_id=10000&include=all").await;
+    assert_eq!(listed["items"][0]["deleted"], true);
+
+    // 非法 include → 10001。
+    let (status, body) = test
+        .ctl("GET", "/_mqs/media-images?include=bogus", None)
+        .await;
+    assert_eq!(status, 400);
+    assert_eq!(body["code"], 10001);
+}

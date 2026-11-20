@@ -301,6 +301,64 @@ async fn upload_media(State(state): State<Arc<AppState>>, req: Request) -> MqsRe
     Err(invalid_param("multipart upload requires a 'file' field"))
 }
 
+// ------------------------------------------------------------------ material images (panel)
+#[derive(serde::Deserialize)]
+struct MediaImagePatch {
+    file_name: Option<String>,
+    expires_at: Option<i64>,
+}
+
+/// 素材面板列表。`include` 决定是否带出过期/软删除的记录（调试 90 天过期与删除
+/// 用），`bot_id` 过滤单个 Bot；不传就是全部 Bot。
+async fn control_list_media_images(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<Map<String, Value>>,
+) -> MqsResult<Json<Value>> {
+    let include = query
+        .get("include")
+        .and_then(Value::as_str)
+        .unwrap_or("valid");
+    let (include_expired, include_deleted) = match include {
+        "valid" | "" => (false, false),
+        "expired" => (true, false),
+        "all" => (true, true),
+        other => {
+            return Err(invalid_param(format!(
+                "include must be valid, expired or all (got {other:?})"
+            )))
+        }
+    };
+    let bot_id = query
+        .get("bot_id")
+        .or_else(|| query.get("bot"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty());
+    Ok(Json(state.world.admin_list_media_images(
+        bot_id,
+        include_expired,
+        include_deleted,
+    )?))
+}
+
+async fn control_update_media_image(
+    State(state): State<Arc<AppState>>,
+    Path(image_id): Path<String>,
+    QqJson(payload): QqJson<MediaImagePatch>,
+) -> MqsResult<Json<Value>> {
+    Ok(Json(state.world.admin_update_media_image(
+        &image_id,
+        payload.file_name.as_deref(),
+        payload.expires_at,
+    )?))
+}
+
+async fn control_delete_media_image(
+    State(state): State<Arc<AppState>>,
+    Path(image_id): Path<String>,
+) -> MqsResult<Json<Value>> {
+    Ok(Json(state.world.admin_delete_media_image(&image_id)?))
+}
+
 // ------------------------------------------------------------------ groups
 async fn list_groups(State(state): State<Arc<AppState>>) -> MqsResult<Json<Value>> {
     Ok(Json(Value::Array(state.world.list_groups()?)))
@@ -1191,6 +1249,11 @@ pub fn control_router(state: Arc<AppState>) -> Router {
             get(get_user).patch(patch_user).delete(delete_user),
         )
         .route("/_mqs/media", post(upload_media))
+        .route("/_mqs/media-images", get(control_list_media_images))
+        .route(
+            "/_mqs/media-images/{image_id}",
+            patch(control_update_media_image).delete(control_delete_media_image),
+        )
         .route("/_mqs/groups", get(list_groups).post(create_group))
         .route(
             "/_mqs/groups/{group_id}",
