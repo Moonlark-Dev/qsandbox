@@ -153,3 +153,24 @@ async fn gateway_url_and_frames_are_logged() {
     assert!(summaries.contains("READY"), "{summaries}");
     assert!(summaries.contains("gateway disconnected"), "{summaries}");
 }
+
+#[tokio::test]
+async fn identify_frame_redacts_the_bot_token() {
+    let test = Test::start().await;
+    let (ws, _ready, token) = test.connect_gateway("10000", 1 << 25).await;
+    drop(ws);
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    let frames = test
+        .world()
+        .list_frames(0, 200, None, Some("ws"), None)
+        .unwrap();
+    let identify = frames
+        .iter()
+        .find(|frame| frame["summary"].as_str().unwrap_or("").contains("op=2"))
+        .expect("identify frame is logged");
+    assert_eq!(identify["data"]["d"]["token"], "***");
+    assert!(
+        !serde_json::to_string(&frames).unwrap().contains(&token),
+        "the access token must not appear in any debug frame"
+    );
+}

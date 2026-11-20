@@ -1343,11 +1343,20 @@ impl World {
             }
         }
         Err(invalid_param(format!(
-            "cannot resolve conversation: {candidate}"
+            "cannot resolve conversation: {candidate} \
+             (expected group:<group_id> | dm:<app_id>:<user_id> | <group_id> | <app_id>:<user_id>)"
         )))
     }
 
     // ------------------------------------------------------------------ messages (read side)
+    pub fn get_message(&self, message_id: &str) -> MqsResult<Value> {
+        let row = self
+            .db
+            .one("SELECT * FROM messages WHERE msg_id=?", &p![message_id])?
+            .ok_or_else(|| invalid_param(format!("message not found: {message_id}")))?;
+        self.message_out(&row)
+    }
+
     pub fn list_messages(
         &self,
         conversation_id: &str,
@@ -2400,23 +2409,19 @@ impl World {
     ) {
         let ts = self.clock.now_ms();
         let summary = summary.chars().take(300).collect::<String>();
-        let payload = data.to_string();
-        let payload = if payload.len() > 20000 {
-            &payload[..20000]
-        } else {
-            &payload
-        };
+        let data = redact_frame_data(data);
+        let mut payload = data.to_string();
+        if payload.len() > 20000 {
+            // JSON 里有多字节字符，按字节截断前先退回字符边界，避免 panic。
+            let mut end = 20000;
+            while !payload.is_char_boundary(end) {
+                end -= 1;
+            }
+            payload.truncate(end);
+        }
         let _ = self.db.execute(
             "INSERT INTO frames(ts,direction,kind,bot_id,session_id,summary,data_json) VALUES(?,?,?,?,?,?,?)",
-            &p![
-                ts,
-                direction,
-                kind,
-                bot_id,
-                session_id,
-                &summary,
-                payload
-            ],
+            &p![ts, direction, kind, bot_id, session_id, &summary, &payload],
         );
         let count = self.frame_writes.fetch_add(1, Ordering::Relaxed) + 1;
         if count.is_multiple_of(50) {
@@ -2553,6 +2558,40 @@ impl World {
     pub fn iso(&self, ms: i64) -> String {
         self.clock.iso(Some(ms))
     }
+}
+
+/// 调试帧里禁止出现凭据。HTTP 帧的 `authorization`/`clientSecret` 已在
+/// `http.rs` 单独打码，这里统一兜底；WS `op=2 identify` 的 `d.token` 就是
+/// Bot token，靠这里打码（之前是明文）。
+fn redact_frame_data(value: &Value) -> Value {
+    const SECRET_KEYS: [&str; 7] = [
+        "authorization",
+        "token",
+        "access_token",
+        "clientsecret",
+        "client_secret",
+        "secret",
+        "app_secret",
+    ];
+    fn walk(value: &mut Value) {
+        match value {
+            Value::Object(map) => {
+                for (key, item) in map.iter_mut() {
+                    if SECRET_KEYS.contains(&key.to_ascii_lowercase().as_str()) && item.is_string()
+                    {
+                        *item = Value::String("***".into());
+                    } else {
+                        walk(item);
+                    }
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(walk),
+            _ => {}
+        }
+    }
+    let mut out = value.clone();
+    walk(&mut out);
+    out
 }
 
 pub fn mime_for_name(name: &str) -> String {

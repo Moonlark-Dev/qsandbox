@@ -101,6 +101,13 @@ async fn status(State(state): State<Arc<AppState>>) -> MqsResult<Json<Value>> {
     data["host"] = Value::String(state.config.host.clone());
     data["base_url"] = Value::String(state.config.base_url());
     data["ws_url"] = Value::String(state.config.ws_url());
+    // 同上，但固定走回环地址：`base_url` 在 `--host 0.0.0.0` 时是局域网地址，
+    // 本机脚本直接连它可能被防火墙/代理拦，用这两个字段拼 URL 最稳。
+    data["local_base_url"] = Value::String(format!("http://127.0.0.1:{}", state.config.sim_port));
+    data["local_ws_url"] = Value::String(format!(
+        "ws://127.0.0.1:{}/websocket",
+        state.config.sim_port
+    ));
     data["profile_dir"] =
         Value::String(state.world.paths.directory().to_string_lossy().into_owned());
     data["gui_url"] = Value::String(state.config.gui_url.clone());
@@ -703,6 +710,13 @@ async fn list_messages(
     Ok(Json(json!({"items": messages, "next_cursor": cursor})))
 }
 
+async fn get_message(
+    State(state): State<Arc<AppState>>,
+    Path(message_id): Path<String>,
+) -> MqsResult<Json<Value>> {
+    Ok(Json(state.world.get_message(&message_id)?))
+}
+
 async fn click_button(
     State(state): State<Arc<AppState>>,
     Path(message_id): Path<String>,
@@ -1233,6 +1247,7 @@ pub fn control_router(state: Arc<AppState>) -> Router {
             "/_mqs/conversations/{conversation_id}/messages",
             get(list_messages),
         )
+        .route("/_mqs/messages/{message_id}", get(get_message))
         .route("/_mqs/messages/{message_id}/click", post(click_button))
         .route("/_mqs/messages/{message_id}/cmd", post(click_text_command))
         .route("/_mqs/chat/send", post(chat_send))

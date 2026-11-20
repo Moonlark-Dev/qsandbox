@@ -71,17 +71,29 @@ mqs token --bot 10000                   # 直接打印 App Access Token
 mqs user create --name 小明 --random     # 建虚拟用户
 mqs user list --available               # 可操作账号
 mqs group create --name 测试群 --members 5
-mqs send --as-user u_000001 --to group:g_000002 --text "你好" --no-at
+mqs send --as-user u_000001 --to group:g_000002 --text "你好" --at-bot 10000
+mqs send --as-user u_000001 --to dm:10000:u_000001 --text "你好" --wait-reply 10s
+mqs messages list --conversation group:g_000002   # 会话消息（Bot 的回复 direction=out）
+mqs messages show MQS_MSG_...                     # 单条消息全文 + raw 字段
 mqs expect --event group_at_message_create --timeout 3s
 mqs clock advance 6m                    # 快进虚拟时钟（被动窗口/配额/token 过期）
 mqs script run smoke --junit out.xml    # 需要 echo bot 在线
-mqs logs -f --kind ws                   # 调试帧
+mqs logs -f --kind ws                   # 调试帧（--json 含完整 payload）
+mqs bot list --show-secret              # Bot 的 AppSecret 默认脱敏为 ***
 mqs doctor                              # 环境自检
 mqs contract export                     # 覆盖率文档 + 前端 TS 类型
 mqs mcp                                 # stdio MCP server（10 个工具）
 ```
 
-全部命令支持 `--json`；退出码：0 成功 / 2 用法 / 3 连接失败 / 4 端口或锁冲突 / 5 场景失败。
+`--to` 的会话写法：`group:<group_id>`（群聊）、`dm:<app_id>:<user_id>`（单聊），也接受裸群号与裸 `appid:userid`。
+
+全部命令支持 `--json`：成功时 stdout 是数据本身；**失败时 stdout 也是单个 JSON 文档**
+（`{"ok": false, "exit_code": ..., "message": ...}`），可以直接被脚本 `json.load`。
+`status --json` 同时给出 `base_url`（监听主机地址）与 `local_base_url` / `local_ws_url`
+（固定 `127.0.0.1`）、`sim_port` / `control_port`。退出码：0 成功 / 2 用法 / 3 连接失败 / 4 端口或锁冲突 / 5 场景或等待失败。
+
+> Bot 的「出站回复」不进事件流，`mqs expect` 等不到它；用 `--wait-reply` 或
+> `mqs messages list`。`logs` 的纯文本只打摘要，完整帧（含请求体）要加 `--json`。
 
 ## 能力矩阵
 

@@ -86,9 +86,9 @@
 
 ## 7. 工程/运维未做
 
-- **secret 明文落盘** — 沙箱把 AppSecret 存在 SQLite（`bots.secret`），未接系统钥匙串（macOS Keychain / Windows Credential Manager / libsecret）。影响：演示机或共享机器上等于明文配置。
+- **secret 明文落盘** — 沙箱把 AppSecret 存在 SQLite（`bots.secret`），未接系统钥匙串（macOS Keychain / Windows Credential Manager / libsecret）。影响：演示机或共享机器上等于明文配置。CLI 与调试帧已默认脱敏（`mqs bot list`/`bot create` 显示 `***`，`--show-secret` 才输出明文；WS `op=2 identify` 帧的 `d.token` 也是 `***`），但 DB 本身仍是明文。
 - **`--record` / 可重放 fixture** — 目前只有 `profile export/import` 快照，没有"录制真实流量→回放"的能力；官方文档不涉及，属工具链缺口。影响：与真机比对只能靠人肉抓包。
-- **多 profile 并发** — CLI 有 `--profile` 与 `profiles.json` 索引，但多 profile 同时 serve、端口/ `runtime.json` 冲突的路径未进 CI。影响：一台机器同时跑"干净沙箱 + 演示沙箱"要手工改端口。
+- **多 profile 并发** — CLI 有 `--profile` 与 `profiles.json` 索引，但多 profile 同时 serve、端口/ `runtime.json` 冲突的路径未进 CI。影响：一台机器同时跑"干净沙箱 + 演示沙箱"要手工改端口（`mqs serve` 绑定失败时现在会提示 `--port`/`--control-port`，但没有自动挑空闲端口的策略）。
 - **SDK 实测矩阵** — CI 只跑 botpy + `mqs-compat` 垫片；Koishi、NoneBot、`qq-bot-sdk`（Node）未纳入。影响：这三个生态最常用的库一旦按新路径（`stream_messages`、`join_approval_strategy`）改造，沙箱无法提前发现不兼容。
 - **错误码真机校正** — 见 §4 末条：沙箱的 7 个码与官方单接口页的码表差距很大，需要一次以官方码表为准的逐接口核对（`err_code` 字段名已同时输出：错误体里 `code` 与 `err_code` 同值，两类 SDK 都能读到）。
 - **webhook 签名真机对齐** — 用官方文档给出的示例向量（`appid:11111111`、`secret:DG5g3B4j9X2KOErG`、`plain_token:Arq0D5A61EgUu4OxUvOp`、`event_ts:1725442341` → `87befc99…`）做回归用例，目前没有。
