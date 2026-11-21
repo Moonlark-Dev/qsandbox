@@ -154,12 +154,17 @@ async function loadMembers(groupId: string) {
 }
 
 function handleLiveMessage(data: any) {
-  if (data.conversation_id === activeConversationId.value) {
-    messages.value = [...messages.value, data.message]
-    // Only follow new messages while the reader is already at the bottom;
-    // otherwise keep their position (the "跳到最后" icon then shows up).
-    if (isMine(data.message) || atBottom.value) scrollToBottom()
+  if (data.conversation_id !== activeConversationId.value) return
+  // 流式消息的后续分片是同一 msg_id 的就地更新，不能当新消息追加。
+  const index = messages.value.findIndex((message) => message.msg_id === data.message.msg_id)
+  if (index >= 0) {
+    messages.value = messages.value.map((message, i) => (i === index ? data.message : message))
+    return
   }
+  messages.value = [...messages.value, data.message]
+  // Only follow new messages while the reader is already at the bottom;
+  // otherwise keep their position (the "跳到最后" icon then shows up).
+  if (isMine(data.message) || atBottom.value) scrollToBottom()
 }
 
 function distanceToBottom(pane: HTMLElement): number {

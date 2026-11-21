@@ -135,6 +135,9 @@ pub fn default_settings() -> Map<String, Value> {
         ("passive_window_group_ms", Value::from(60 * 60 * 1000)),
         ("passive_reply_limit_group", Value::from(5)),
         ("passive_reply_limit_group_admin", Value::from(50)),
+        // 官方只给出 remain_msg_len 字段，没有公布流式消息的长度上限；
+        // 沙箱按文本消息的常见上限取 4000 字符，可用设置项调。
+        ("stream_msg_max_len", Value::from(4000)),
         ("active_c2c_require_friend", Value::Bool(false)),
         ("allow_remote_media", Value::Bool(false)),
         ("media_image_limit", Value::from(100)),

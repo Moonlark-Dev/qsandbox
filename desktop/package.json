@@ -1,7 +1,7 @@
 {
   "name": "mqs-desktop",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "QSandbox desktop shell (Tauri) — the sandbox server is embedded in the same binary",
   "scripts": {
     "dev": "tauri dev",

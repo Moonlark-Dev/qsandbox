@@ -2,7 +2,7 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::db::{b, conn_exec, conn_insert, conn_one, i, json_col, s};
+use crate::db::{b, conn_exec, conn_insert, conn_one, i, json_col, s, Row};
 use crate::error::{
     bot_offline, duplicate_reply, internal, invalid_param, media_image_expired,
     media_reference_invalid, message_not_found, no_permission, passive_window_expired,
@@ -34,6 +34,21 @@ struct PassiveReference {
     source: PassiveSource,
     /// 群消息来自哪个群：次数上限要看机器人在该群的角色（群主/管理员 50，否则 5）。
     group_id: Option<String>,
+}
+
+/// 发送目标解析结果（同一套 openid / 会话 / 在线校验给普通发送与流式发送共用）。
+pub struct OutboundTarget {
+    pub bot: Row,
+    pub entity_id: String,
+    pub conversation_id: String,
+}
+
+/// 被动 / 主动授权结果：`msg_seq` 要写回消息，`rate` 是主动消息的限流头。
+pub struct OutboundAuth {
+    pub msg_seq: i64,
+    pub rate: Option<Value>,
+    /// 被动回复引用的消息 `msg_id`（`event_id` 与主动消息没有引用）。
+    pub reference_msg_id: Option<String>,
 }
 
 impl World {
@@ -465,22 +480,214 @@ impl World {
         body: &Value,
     ) -> MqsResult<Value> {
         validate_send_body(body)?;
-        let bot = self.bot_by_id(bot_id)?;
-        let scopes = json_col(&bot, "scopes", json!([]));
-        let has_scope = |scope: &str| {
-            scopes
-                .as_array()
-                .map(|items| items.iter().any(|v| v.as_str() == Some(scope)))
-                .unwrap_or(false)
+        let target = self.resolve_outbound_target(bot_id, target_kind, target_openid)?;
+        if body.get("media").map(|v| !v.is_null()).unwrap_or(false)
+            && !bot_has_scope(&target.bot, BOT_SCOPE_MEDIA)
+        {
+            return Err(no_permission("bot lacks the media scope"));
+        }
+        let bot = target.bot;
+        let entity_id = target.entity_id;
+        let conversation_id = target.conversation_id;
+
+        let now = self.clock.now_ms();
+        // Markdown 里引用的素材图片必须先通过归属/时效校验；发送成功后再顺延
+        // 90 天滑动有效期（在写消息的同一事务里更新），失败不改变任何状态。
+        let image_ids = match markdown_source(body) {
+            Some(source) => self.resolve_media_image_refs(bot_id, source)?,
+            None => Vec::new(),
         };
-        if target_kind == "group" && !has_scope(BOT_SCOPE_GROUP) {
+        let auth = self.authorize_outbound(
+            bot_id,
+            &bot,
+            target_kind,
+            &entity_id,
+            &conversation_id,
+            body,
+            now,
+        )?;
+        let msg_seq = auth.msg_seq;
+        let rate_result = auth.rate;
+
+        let msg_type = body.get("msg_type").and_then(|v| v.as_i64()).unwrap_or(0);
+        let content = body.get("content").and_then(|v| v.as_str()).unwrap_or("");
+        let has_payload = ["markdown", "keyboard", "ark", "embed", "media"]
+            .iter()
+            .any(|key| body.get(*key).map(|v| !v.is_null()).unwrap_or(false));
+        if content.is_empty() && !has_payload {
+            return Err(invalid_param("message body is empty"));
+        }
+
+        let msg_id = new_msg_id("MQS_MSG");
+        let sent_at = self.clock.now_ms();
+        let mut raw = body.as_object().cloned().unwrap_or_default();
+        raw.insert("id".into(), Value::String(msg_id.clone()));
+        raw.insert(
+            "timestamp".into(),
+            Value::String(self.clock.iso(Some(sent_at))),
+        );
+        raw.insert("msg_seq".into(), Value::from(msg_seq));
+        // `<qqbot-at-user id="…">` 里的 openid 是给客户端看的，控制台要把它翻译成
+        // 昵称才能像真机一样显示 `@某人`。普通字段原样保留，另加 `at_users` 供 GUI 用。
+        if let Some(source) = markdown_source(body) {
+            let at_users = self.resolve_at_users(bot_id, source)?;
+            if !at_users.is_empty() {
+                raw.insert("at_users".into(), Value::Array(at_users));
+            }
+        }
+        let mut attachments: Vec<Value> = Vec::new();
+        if let Some(file_info) = body
+            .get("media")
+            .and_then(|media| media.get("file_info"))
+            .and_then(|v| v.as_str())
+        {
+            let mhash = file_info.strip_prefix("mqs-file-").unwrap_or(file_info);
+            if let Some(media) = self.media_by_hash(mhash)? {
+                attachments.push(json!({
+                    "content_type": s(&media, "mime"),
+                    "filename": &mhash[..mhash.len().min(12)],
+                    "size": i(&media, "size"),
+                    "url": format!("/media/{mhash}"),
+                    "id": mhash,
+                }));
+            }
+        }
+        let seq = self.insert_outbound_message(
+            &conversation_id,
+            bot_id,
+            &msg_id,
+            msg_type,
+            content,
+            &Value::Object(raw.clone()),
+            sent_at,
+            &image_ids,
+            now,
+        )?;
+        let message_row = self
+            .db
+            .one("SELECT * FROM messages WHERE msg_id=?", &p![&msg_id])?
+            .ok_or_else(|| internal("message row missing"))?;
+        let mut out = self.message_out(&message_row)?;
+        out["attachments"] = Value::Array(attachments);
+        self.hub.publish(&json!({
+            "kind": "message",
+            "conversation_id": conversation_id,
+            "message": out,
+        }));
+        self.log_frame(
+            "out",
+            "http",
+            &format!(
+                "POST message -> {target_kind}:{} [{msg_id}]",
+                &target_openid[..target_openid.len().min(12)]
+            ),
+            &json!({
+                "request": Value::Object(raw.clone()),
+                "response": {"id": msg_id, "timestamp": raw.get("timestamp")},
+            }),
+            Some(bot_id),
+            None,
+        );
+        let mut result = json!({
+            "id": msg_id,
+            "timestamp": raw.get("timestamp").cloned().unwrap_or(Value::Null),
+            "seq": seq,
+            "conversation_id": conversation_id,
+        });
+        if let Some(info) = rate_result {
+            result["_rate"] = info;
+        }
+        Ok(result)
+    }
+
+    /// 插入一条 Bot 外发消息并推进会话 `last_seq`；`renew_media` 里的素材图片
+    /// 在同一事务里顺延 90 天滑动有效期。普通发送与流式发送共用。
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_outbound_message(
+        &self,
+        conversation_id: &str,
+        bot_id: &str,
+        msg_id: &str,
+        msg_type: i64,
+        content: &str,
+        raw: &Value,
+        sent_at: i64,
+        renew_media: &[String],
+        now: i64,
+    ) -> MqsResult<i64> {
+        let raw_json = raw.to_string();
+        self.db.tx(|conn| {
+            conn_exec(
+                conn,
+                "UPDATE conversations SET last_seq=last_seq+1 WHERE id=?",
+                &p![conversation_id],
+            )?;
+            let seq = conn_one(
+                conn,
+                "SELECT last_seq FROM conversations WHERE id=?",
+                &p![conversation_id],
+            )?
+            .map(|row| i(&row, "last_seq"))
+            .unwrap_or(0);
+            conn_exec(
+                conn,
+                "INSERT INTO messages(conversation_id,seq,msg_id,event_id,direction,sender_id,sender_type,bot_id,\
+                 msg_type,content,raw_json,sent_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                &p![
+                    conversation_id,
+                    seq,
+                    msg_id,
+                    Value::Null,
+                    "out",
+                    bot_id,
+                    "bot",
+                    bot_id,
+                    msg_type,
+                    content,
+                    &raw_json,
+                    sent_at
+                ],
+            )?;
+            for image_id in renew_media {
+                conn_exec(
+                    conn,
+                    "UPDATE media_images SET expires_at=? WHERE id=? AND bot_id=?",
+                    &p![now + MEDIA_IMAGE_TTL_MS, image_id, bot_id],
+                )?;
+            }
+            Ok(seq)
+        })
+    }
+
+    /// 就地更新一条 Bot 外发消息（流式消息的后续分片）。
+    pub fn update_outbound_message(
+        &self,
+        conversation_id: &str,
+        msg_id: &str,
+        content: &str,
+        raw: &Value,
+    ) -> MqsResult<()> {
+        self.db.execute(
+            "UPDATE messages SET content=?, raw_json=? WHERE msg_id=? AND conversation_id=?",
+            &p![content, raw.to_string(), msg_id, conversation_id],
+        )?;
+        Ok(())
+    }
+
+    /// 解析发送目标：Bot、scope、openid、群成员关系、会话与在线检查。
+    /// 普通发送与流式发送共用，保证两套接口的前置校验完全一致。
+    pub fn resolve_outbound_target(
+        &self,
+        bot_id: &str,
+        target_kind: &str,
+        target_openid: &str,
+    ) -> MqsResult<OutboundTarget> {
+        let bot = self.bot_by_id(bot_id)?;
+        if target_kind == "group" && !bot_has_scope(&bot, BOT_SCOPE_GROUP) {
             return Err(no_permission("bot lacks the group_message scope"));
         }
-        if target_kind == "user" && !has_scope(BOT_SCOPE_C2C) {
+        if target_kind == "user" && !bot_has_scope(&bot, BOT_SCOPE_C2C) {
             return Err(no_permission("bot lacks the c2c_message scope"));
-        }
-        if body.get("media").map(|v| !v.is_null()).unwrap_or(false) && !has_scope(BOT_SCOPE_MEDIA) {
-            return Err(no_permission("bot lacks the media scope"));
         }
         let mapping = self.resolve_openid(bot_id, target_openid)?;
         if s(&mapping, "kind") != target_kind {
@@ -503,7 +710,6 @@ impl World {
             format!("dm:{bot_id}:{entity_id}")
         };
         self.ensure_conversation(&conversation_id)?;
-
         if self.setting_bool("require_online")
             && s(&bot, "delivery") == "ws"
             && self
@@ -516,29 +722,43 @@ impl World {
                 "connect the bot to the gateway before sending messages",
             ));
         }
+        Ok(OutboundTarget {
+            bot,
+            entity_id,
+            conversation_id,
+        })
+    }
 
-        let now = self.clock.now_ms();
-        // Markdown 里引用的素材图片必须先通过归属/时效校验；发送成功后再顺延
-        // 90 天滑动有效期（在写消息的同一事务里更新），失败不改变任何状态。
-        let image_ids = match markdown_source(body) {
-            Some(source) => self.resolve_media_image_refs(bot_id, source)?,
-            None => Vec::new(),
-        };
+    /// 被动回复 / 主动消息授权：窗口、次数、`msg_seq` 去重、主动配额与限流。
+    /// `now` 由调用方取一次，保证同一请求里的多个时间判断一致。
+    #[allow(clippy::too_many_arguments)]
+    pub fn authorize_outbound(
+        &self,
+        bot_id: &str,
+        bot: &Row,
+        target_kind: &str,
+        entity_id: &str,
+        conversation_id: &str,
+        body: &Value,
+        now: i64,
+    ) -> MqsResult<OutboundAuth> {
         let mut rate_result: Option<Value> = None;
         let msg_id_in = body.get("msg_id").and_then(|v| v.as_str()).unwrap_or("");
         let event_id_in = body.get("event_id").and_then(|v| v.as_str()).unwrap_or("");
         // Official passive replies accept either msg_id (a message) or event_id
         // (INTERACTION_CREATE / GROUP_ADD_ROBOT / GROUP_MSG_RECEIVE / C2C_MSG_RECEIVE /
         // FRIEND_ADD). Both are "reply to something the bot already received".
+        let mut reference_msg_id: Option<String> = None;
         let passive: Option<PassiveReference> = if !msg_id_in.is_empty() {
             // 2026-11-17: 群消息的 msg_id 也能用在单聊接口上，私聊回复该群消息的发送者；
             // 窗口/次数仍按群消息规则算，并与群内回复共用同一个 msg_id 的计数。
+            reference_msg_id = Some(msg_id_in.to_string());
             Some(self.resolve_passive_message(
                 bot_id,
                 target_kind,
-                &entity_id,
+                entity_id,
                 msg_id_in,
-                &conversation_id,
+                conversation_id,
             )?)
         } else if !event_id_in.is_empty() {
             let event = self
@@ -558,7 +778,7 @@ impl World {
                 } else {
                     PassiveSource::C2c
                 },
-                group_id: (target_kind == "group").then(|| entity_id.clone()),
+                group_id: (target_kind == "group").then(|| entity_id.to_string()),
             })
         } else {
             None
@@ -625,7 +845,7 @@ impl World {
                 &p![passive_key, bot_id, 1, passive.sent_at + window],
             )?;
         } else {
-            if !b(&bot, "allow_proactive_msg") {
+            if !b(bot, "allow_proactive_msg") {
                 return Err(no_permission(
                     "proactive messages are disabled for this bot",
                 ));
@@ -633,7 +853,7 @@ impl World {
             if target_kind == "group" {
                 if let Some(group_bot) = self.db.one(
                     "SELECT allow_proactive_msg FROM group_bots WHERE group_id=? AND bot_id=?",
-                    &p![&entity_id, bot_id],
+                    &p![entity_id, bot_id],
                 )? {
                     if !b(&group_bot, "allow_proactive_msg") {
                         return Err(no_permission(
@@ -652,14 +872,14 @@ impl World {
                 .rate
                 .lock()
                 .unwrap()
-                .check_active(bot_id, scene, &entity_id)?;
+                .check_active(bot_id, scene, entity_id)?;
             let quota = self.setting_i64("active_quota_per_day");
             let day = self.clock.day();
             let used = self
                 .db
                 .one(
                     "SELECT used FROM active_quota WHERE bot_id=? AND conversation_id=? AND day=?",
-                    &p![bot_id, &conversation_id, &day],
+                    &p![bot_id, conversation_id, &day],
                 )?
                 .map(|row| i(&row, "used"))
                 .unwrap_or(0);
@@ -671,126 +891,15 @@ impl World {
             self.db.execute(
                 "INSERT INTO active_quota(bot_id,conversation_id,day,used) VALUES(?,?,?,1) \
                  ON CONFLICT(bot_id,conversation_id,day) DO UPDATE SET used=used+1",
-                &p![bot_id, &conversation_id, &day],
+                &p![bot_id, conversation_id, &day],
             )?;
             rate_result = Some(info.as_dict());
         }
-
-        let msg_type = body.get("msg_type").and_then(|v| v.as_i64()).unwrap_or(0);
-        let content = body.get("content").and_then(|v| v.as_str()).unwrap_or("");
-        let has_payload = ["markdown", "keyboard", "ark", "embed", "media"]
-            .iter()
-            .any(|key| body.get(*key).map(|v| !v.is_null()).unwrap_or(false));
-        if content.is_empty() && !has_payload {
-            return Err(invalid_param("message body is empty"));
-        }
-
-        let msg_id = new_msg_id("MQS_MSG");
-        let sent_at = self.clock.now_ms();
-        let mut raw = body.as_object().cloned().unwrap_or_default();
-        raw.insert("id".into(), Value::String(msg_id.clone()));
-        raw.insert(
-            "timestamp".into(),
-            Value::String(self.clock.iso(Some(sent_at))),
-        );
-        raw.insert("msg_seq".into(), Value::from(msg_seq));
-        // `<qqbot-at-user id="…">` 里的 openid 是给客户端看的，控制台要把它翻译成
-        // 昵称才能像真机一样显示 `@某人`。普通字段原样保留，另加 `at_users` 供 GUI 用。
-        if let Some(source) = markdown_source(body) {
-            let at_users = self.resolve_at_users(bot_id, source)?;
-            if !at_users.is_empty() {
-                raw.insert("at_users".into(), Value::Array(at_users));
-            }
-        }
-        let mut attachments: Vec<Value> = Vec::new();
-        if let Some(file_info) = body
-            .get("media")
-            .and_then(|media| media.get("file_info"))
-            .and_then(|v| v.as_str())
-        {
-            let mhash = file_info.strip_prefix("mqs-file-").unwrap_or(file_info);
-            if let Some(media) = self.media_by_hash(mhash)? {
-                attachments.push(json!({
-                    "content_type": s(&media, "mime"),
-                    "filename": &mhash[..mhash.len().min(12)],
-                    "size": i(&media, "size"),
-                    "url": format!("/media/{mhash}"),
-                    "id": mhash,
-                }));
-            }
-        }
-        let seq = self.db.tx(|conn| {
-            conn_exec(
-                conn,
-                "UPDATE conversations SET last_seq=last_seq+1 WHERE id=?",
-                &p![&conversation_id],
-            )?;
-            let seq = conn_one(conn, "SELECT last_seq FROM conversations WHERE id=?", &p![&conversation_id])?
-                .map(|row| i(&row, "last_seq"))
-                .unwrap_or(0);
-            conn_exec(
-                conn,
-                "INSERT INTO messages(conversation_id,seq,msg_id,event_id,direction,sender_id,sender_type,bot_id,\
-                 msg_type,content,raw_json,sent_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                &p![
-                    &conversation_id,
-                    seq,
-                    &msg_id,
-                    Value::Null,
-                    "out",
-                    bot_id,
-                    "bot",
-                    bot_id,
-                    msg_type,
-                    content,
-                    Value::Object(raw.clone()).to_string(),
-                    sent_at
-                ],
-            )?;
-            for image_id in &image_ids {
-                conn_exec(
-                    conn,
-                    "UPDATE media_images SET expires_at=? WHERE id=? AND bot_id=?",
-                    &p![now + MEDIA_IMAGE_TTL_MS, image_id, bot_id],
-                )?;
-            }
-            Ok(seq)
-        })?;
-        let message_row = self
-            .db
-            .one("SELECT * FROM messages WHERE msg_id=?", &p![&msg_id])?
-            .ok_or_else(|| internal("message row missing"))?;
-        let mut out = self.message_out(&message_row)?;
-        out["attachments"] = Value::Array(attachments);
-        self.hub.publish(&json!({
-            "kind": "message",
-            "conversation_id": conversation_id,
-            "message": out,
-        }));
-        self.log_frame(
-            "out",
-            "http",
-            &format!(
-                "POST message -> {target_kind}:{} [{msg_id}]",
-                &target_openid[..target_openid.len().min(12)]
-            ),
-            &json!({
-                "request": Value::Object(raw.clone()),
-                "response": {"id": msg_id, "timestamp": raw.get("timestamp")},
-            }),
-            Some(bot_id),
-            None,
-        );
-        let mut result = json!({
-            "id": msg_id,
-            "timestamp": raw.get("timestamp").cloned().unwrap_or(Value::Null),
-            "seq": seq,
-            "conversation_id": conversation_id,
-        });
-        if let Some(info) = rate_result {
-            result["_rate"] = info;
-        }
-        Ok(result)
+        Ok(OutboundAuth {
+            msg_seq,
+            rate: rate_result,
+            reference_msg_id,
+        })
     }
 
     /// Resolve the `msg_id` of a passive reply.
@@ -1339,6 +1448,13 @@ impl World {
         let row = row.ok_or_else(|| message_not_found("interaction not found"))?;
         Ok(json!({"code": code, "seq": i(&row, "seq")}))
     }
+}
+
+fn bot_has_scope(bot: &Row, scope: &str) -> bool {
+    json_col(bot, "scopes", json!([]))
+        .as_array()
+        .map(|items| items.iter().any(|value| value.as_str() == Some(scope)))
+        .unwrap_or(false)
 }
 
 /// Pydantic used to enforce these types; the Rust port must reject the same

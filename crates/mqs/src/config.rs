@@ -12,7 +12,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const DEFAULT_PROFILE: &str = "default";
 pub const DEFAULT_SIM_PORT: u16 = 5700;
 pub const DEFAULT_CONTROL_PORT: u16 = 5701;
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 pub const RUNTIME_FILE: &str = "runtime.json";
 pub const PROFILE_FILE: &str = "profile.json";

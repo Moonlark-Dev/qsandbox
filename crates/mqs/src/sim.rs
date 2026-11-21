@@ -127,6 +127,20 @@ async fn send_c2c_message(
     Ok(rate_and_json(result))
 }
 
+async fn send_stream_message(
+    State(state): State<Arc<AppState>>,
+    Path(openid): Path<String>,
+    BotCtx(bot): BotCtx,
+    QqJson(payload): QqJson<MessageSendRequest>,
+) -> MqsResult<Response> {
+    let result = state.world.send_stream_chunk(
+        bot["id"].as_str().unwrap_or(""),
+        &openid,
+        &Value::Object(payload.body),
+    )?;
+    Ok(rate_and_json(result))
+}
+
 fn rate_and_json(mut result: Value) -> Response {
     let rate = result
         .as_object_mut()
@@ -1028,6 +1042,10 @@ pub fn sim_router(state: Arc<AppState>) -> Router {
         )
         .route("/v2/users/{openid}/messages", post(send_c2c_message))
         .route(
+            "/v2/users/{openid}/stream_messages",
+            post(send_stream_message),
+        )
+        .route(
             "/v2/users/{openid}/messages/{message_id}",
             delete(delete_c2c_message),
         )
@@ -1127,6 +1145,7 @@ pub const ROUTE_TABLE: &[(&str, &str)] = &[
     ("POST", "/v2/groups/{group_openid}/messages"),
     ("DELETE", "/v2/groups/{group_openid}/messages/{message_id}"),
     ("POST", "/v2/users/{openid}/messages"),
+    ("POST", "/v2/users/{openid}/stream_messages"),
     ("DELETE", "/v2/users/{openid}/messages/{message_id}"),
     ("PUT", "/v2/interactions/{interaction_id}"),
     ("POST", "/v2/groups/{group_openid}/upload_prepare"),

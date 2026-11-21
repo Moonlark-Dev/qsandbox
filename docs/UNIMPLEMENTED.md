@@ -1,7 +1,7 @@
 # QSandbox 未实现清单（对照 QQ 机器人官方文档 v2）
 
 > 文档快照：2026-11-20。口径：官方文档站（bot.q.qq.com/wiki）全量 sitemap 174 个 API v2 页面 + 变更记录逐条比对，
-> 与本仓库 `crates/mqs/src/contract.rs` 的 `REGISTRY`（35 个端点）
+> 与本仓库 `crates/mqs/src/contract.rs` 的 `REGISTRY`（36 个端点）
 > 及 `gateway.rs::intent_for`（`1<<24`、`1<<25`、`1<<26`）对照。**查不到路径的写"文档未给出具体路径"，不臆造。**
 > 本清单只列"文档确实有、沙箱没有"的能力；沙箱多做的东西（如 `msg_type` 直接接受 `keyboard`/`embed`）
 > 不计入缺口，另见 `docs/COMPAT.md`。
@@ -50,7 +50,7 @@
 - **普通文件 `file_type=4`** — `POST /v2/groups|users/{openid}/files`，`file_type` 1 图片/2 视频/3 语音/4 文件（200MB），超过软限制会降级为文件类型上传（`rich-media.html`）。沙箱显式返回"file_type 4 is not supported"（`sim.rs:26`）。影响：发 PDF/zip 等真实需求在沙箱里必失败，且"软限制降级"路径无法验证。
 - **图文卡片 `msg_type=8`** — 群/单聊均支持，`card.type=tuwen` + `title(1-50)/description(1-200)/url(https)/pic_url(https)`（2026-10-28 新增）。影响：新版客户端主推形态之一，沙箱直接拒。
 - **输入中状态 `msg_type=6`** — 仅单聊，`input_notify` 字段。影响：流式/打字机效果的前置交互无法模拟。
-- **流式消息（1 个接口）** — `POST /v2/users/{user_openid}/stream_messages`，`stream_msg_id`/`index`/`input_state(1|10)`/`input_mode(append|replace)`/`content_raw`，50 QPS；群聊明确"不支持流式参数"。影响：LLM 类机器人最常用的输出方式没有沙箱支持。
+- **流式消息已支持（v0.7.0，1 个接口）** — `POST /v2/users/{user_openid}/stream_messages`：`stream_msg_id`/`index`/`input_state(1|10)`/`input_mode(append|replace)`/`content_raw`/`content_type(text|markdown)` 均已按官方页面实现，续片就地更新同一条单聊消息。仍缺：50 QPS 频控与 `50002`、`is_wakeup` 的窗口豁免、流式 markdown 里 `qqbot-media://` 素材引用校验；`remain_msg_len` 的上限官方页面没有给出，沙箱用设置项 `stream_msg_max_len`（默认 4000 字符）近似。群聊流式参数官方明确"不支持"，沙箱同样不支持。
 - **`event_id` 被动回复的事件白名单** — 发消息接口的 `event_id` 与 `msg_id` 二选一。沙箱已支持按 `event_id` 走被动回复（不扣主动配额），但只要求事件属于该 Bot，未校验官方列出的白名单（群 `INTERACTION_CREATE`/`GROUP_ADD_ROBOT`/`GROUP_MSG_RECEIVE`，单聊 `INTERACTION_CREATE`/`C2C_MSG_RECEIVE`/`FRIEND_ADD`）；`GROUP_MSG_RECEIVE`/`C2C_MSG_RECEIVE` 事件本身也没有投递。影响：非法 event_id 组合在沙箱里比真机宽松。
 - **互动召回 `is_wakeup`** — 仅单聊，与 `msg_id`/`event_id` 互斥；用户主动对话后 30 天内 4 个周期各 1 条（当天/1-3/3-7/7-30 天）。影响：召回消息的配额与互斥校验完全没有。
 - **文本交互标签的真机校验** — `<qqbot-at-user id="" />`、`<qqbot-at-everyone />`、`<qqbot-cmd-enter text="" />`、`<qqbot-cmd-input text="" show="" reference="" />` 已按 `trans/text-chain.html` 解析：GUI 渲染 @ 标签与可点击指令，点击 `/回车指令` 以用户身份推送（群里自动 @ 发消息的 Bot），`/参数指令` 回填输入框并支持 `reference` 引用；控制 API 是 `POST /_mqs/messages/{id}/cmd`。仍缺：@全员 的「每群每天 1 次」计数（机器人是否群管理员的 `member_role` 已可配，但该限制本身未实现）、`text`/`show` 的 100 字符上限、频道专属的 `<#channel_id>`/`<emoji:id>`，以及旧格式 `<@userid>`/`@everyone` 的解析（群 @ 消息的 `content` 仍用 `<@!openid>` 前缀拼接）。
@@ -90,13 +90,13 @@
 - **secret 明文落盘** — 沙箱把 AppSecret 存在 SQLite（`bots.secret`），未接系统钥匙串（macOS Keychain / Windows Credential Manager / libsecret）。影响：演示机或共享机器上等于明文配置。CLI 与调试帧已默认脱敏（`mqs bot list`/`bot create` 显示 `***`，`--show-secret` 才输出明文；WS `op=2 identify` 帧的 `d.token` 也是 `***`），但 DB 本身仍是明文。
 - **`--record` / 可重放 fixture** — 目前只有 `profile export/import` 快照，没有"录制真实流量→回放"的能力；官方文档不涉及，属工具链缺口。影响：与真机比对只能靠人肉抓包。
 - **多 profile 并发** — CLI 有 `--profile` 与 `profiles.json` 索引，但多 profile 同时 serve、端口/ `runtime.json` 冲突的路径未进 CI。影响：一台机器同时跑"干净沙箱 + 演示沙箱"要手工改端口（`mqs serve` 绑定失败时现在会提示 `--port`/`--control-port`，但没有自动挑空闲端口的策略）。
-- **SDK 实测矩阵** — CI 只跑 botpy + `mqs-compat` 垫片；Koishi、NoneBot、`qq-bot-sdk`（Node）未纳入。影响：这三个生态最常用的库一旦按新路径（`stream_messages`、`join_approval_strategy`）改造，沙箱无法提前发现不兼容。
+- **SDK 实测矩阵** — CI 只跑 botpy + `mqs-compat` 垫片；Koishi、NoneBot、`qq-bot-sdk`（Node）未纳入。影响：这三个生态最常用的库一旦按新路径（`join_approval_strategy`、`stream_messages`）改造，沙箱无法提前发现不兼容。
 - **错误码真机校正** — 见 §4 末条：沙箱的 7 个码与官方单接口页的码表差距很大，需要一次以官方码表为准的逐接口核对（`err_code` 字段名已同时输出：错误体里 `code` 与 `err_code` 同值，两类 SDK 都能读到）。
 - **webhook 签名真机对齐** — 用官方文档给出的示例向量（`appid:11111111`、`secret:DG5g3B4j9X2KOErG`、`plain_token:Arq0D5A61EgUu4OxUvOp`、`event_ts:1725442341` → `87befc99…`）做回归用例，目前没有。
 
 ## 影响最大的五个缺口
 
-沙箱当前是一个"群聊 + 单聊"的完整沙箱，但把它当"QQ Bot API 沙箱"介绍会立刻在五处露馅：**一是频道族整体缺失**（`/guilds/*`、`/channels/*`、`/users/@me/dms`、频道身份组与 `1<<0/1/9/10/12/30` 事件全无），任何频道机器人示例第一步即 404，这是最大的一块面；**二是消息形态落后于 2026 年的文档**——`msg_type=8` 图文卡片、`msg_type=6` 输入中状态、`stream_messages` 流式消息、`file_type=4` 普通文件、`is_wakeup` 召回、`event_id` 事件白名单五项叠加，恰好覆盖了 LLM 类机器人最常用的输出路径，缺了它们"能跑通真实场景"这个卖点就只剩文本 echo；**三是入站消息 schema 太薄**（无 `message_type=103` 引用、无 `msg_elements`/`ark_data`/`message_scene.ext`、attachments 缺 `voice_wav_url`/`asr_refer_text`），导致引用、卡片、语音三类解析逻辑无法被测试；**四是网关与鉴权的"负面行为"没有模拟**（token 幂等与 60 秒提前刷新、intent 无权限的 4013/4014、4007/4008/4011/4914/4915 关闭码、`session_start_limit` 不递减），这些恰恰是 SDK 作者最容易写错、也最需要沙箱来复现的部分；**五是群管理的 2026-08 新增能力**（入群自动审批策略 6 个接口 + `GROUP_JOIN_REQUEST` 事件）完全空白，使"验群/拉群"这类真实运营机器人无法在沙箱里闭环。素材管理（`media-images` 5 个端点）已在 v0.5.0 补齐，不在缺口内。相比之下按钮权限、错误码细分属于"精度问题"，可以在补完上述五项后再逐条校正。
+沙箱当前是一个"群聊 + 单聊"的完整沙箱，但把它当"QQ Bot API 沙箱"介绍会立刻在五处露馅：**一是频道族整体缺失**（`/guilds/*`、`/channels/*`、`/users/@me/dms`、频道身份组与 `1<<0/1/9/10/12/30` 事件全无），任何频道机器人示例第一步即 404，这是最大的一块面；**二是消息形态落后于 2026 年的文档**——`msg_type=8` 图文卡片、`msg_type=6` 输入中状态、`file_type=4` 普通文件、`is_wakeup` 召回、`event_id` 事件白名单五项叠加，恰好覆盖了 LLM 类机器人最常用的输出路径，缺了它们"能跑通真实场景"这个卖点就只剩文本 echo（流式消息已在 v0.7.0 补齐，不在缺口内）；**三是入站消息 schema 太薄**（无 `message_type=103` 引用、无 `msg_elements`/`ark_data`/`message_scene.ext`、attachments 缺 `voice_wav_url`/`asr_refer_text`），导致引用、卡片、语音三类解析逻辑无法被测试；**四是网关与鉴权的"负面行为"没有模拟**（token 幂等与 60 秒提前刷新、intent 无权限的 4013/4014、4007/4008/4011/4914/4915 关闭码、`session_start_limit` 不递减），这些恰恰是 SDK 作者最容易写错、也最需要沙箱来复现的部分；**五是群管理的 2026-08 新增能力**（入群自动审批策略 6 个接口 + `GROUP_JOIN_REQUEST` 事件）完全空白，使"验群/拉群"这类真实运营机器人无法在沙箱里闭环。素材管理（`media-images` 5 个端点）已在 v0.5.0 补齐，不在缺口内。相比之下按钮权限、错误码细分属于"精度问题"，可以在补完上述五项后再逐条校正。
 
 ## 参考 URL
 

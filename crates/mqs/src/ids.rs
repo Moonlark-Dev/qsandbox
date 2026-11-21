@@ -114,6 +114,35 @@ pub fn new_msg_id(prefix: &str) -> String {
     format!("{prefix}_{}", short_token(24))
 }
 
+/// RFC 4122 v4-shaped UUID. 官方的 `stream_msg_id` 示例是 UUID，沙箱按同样形状生成。
+pub fn new_uuid() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(1);
+    let tick = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut rng = Rng64::new(nanos ^ ((std::process::id() as u64) << 17) ^ tick.rotate_left(41));
+    let mut bytes = [0u8; 16];
+    for chunk in bytes.chunks_mut(8) {
+        let value = rng.next_u64().to_le_bytes();
+        chunk.copy_from_slice(&value[..chunk.len()]);
+    }
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
+}
+
 pub fn new_event_id() -> String {
     format!("MQS_EVT_{}", short_token(20))
 }

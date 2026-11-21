@@ -176,7 +176,7 @@ function handleLive(data: any): void {
     state.live = true
     return
   }
-  if (data.kind === 'message') {
+  if (data.kind === 'message' || data.kind === 'message_update') {
     const conversation = state.conversations.find((c) => c.id === data.conversation_id)
     if (conversation) conversation.last_message = data.message
     messageListeners.forEach((fn) => fn(data))

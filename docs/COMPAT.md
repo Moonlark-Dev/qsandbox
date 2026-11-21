@@ -76,6 +76,8 @@ import mqs.compat.botpy   # 必须在创建 botpy.Client 之前 import
 | 31 | **好友关系仍未建模**：官方要求群消息发送者与 Bot 是好友才可私聊回复（`40054004`/`40054006`） | 沙箱把「该 openid 曾由本 Bot 生成过（`openid_map` 有记录）」当作好友，不能复现「有 openid 但非好友」的拒绝分支；这与 `GET /v2/users/{openid}/info` 的口径一致 | 不引入好友表/`FRIEND_*` 家族，保持「只覆盖群聊 + 单聊 + 群管理 + 媒体」的产品边界 |
 | 32 | **`group_bots.member_role` 可配**（`member`/`admin`/`owner`），`GET .../bot_state` 返回真实值；群被动回复上限据此从 5 提到 50（设置项 `passive_reply_limit_group` / `passive_reply_limit_group_admin`），群内回复与群消息私聊回复都适用 | 沙箱没有「机器人开发者个人账号」，用**机器人在群内的角色**代表「开发者是群主/管理员」；这是该字段在当前产品边界内能做到的最接近建模 | 控制 API `PATCH /_mqs/groups/{group_id}/bots/{bot_id}` 的 `member_role`，GUI 群管理也有下拉框 |
 | 33 | 群被动回复窗口默认 **60 分钟**（`passive_window_group_ms`），仍受虚拟时钟控制；单聊保持 60 分钟 / 4 次 | 用 `POST /_mqs/clock/advance` 测窗口即可，不必等真实时间 | 2026-11-17 官方把群窗口从 5 分钟延长到 60 分钟 |
+| 34 | **流式单聊消息已支持**（`POST /v2/users/{openid}/stream_messages`）：首片不带 `stream_msg_id`，响应 `id` 即后续分片要带的 id；`index` 从 0 递增；`input_state` 1 生成中 / 10 结束；`input_mode=append` 追加、`replace` 以已下发前缀校验（不匹配 → 官方码 40007）；`content_type` 支持 `text`/`markdown`。**沙箱每次请求即时下发**（没有网络/打字机延迟），所以 `SentContent` 就是当前全文；同一 `index` + 相同内容重放按幂等返回，不会重复追加 | 验不了「平台分批下发、pending 只存未下发后缀」的时序，只能验前缀约束与最终消息内容；`remain_msg_len` 的上限官方页面未公布，沙箱用设置项 `stream_msg_max_len`（默认 4000 字符）近似，超限返回 10001 | 续片不重复消耗被动回复次数；被动窗口、`msg_seq` 去重、主动配额/限流与普通发送共用同一套逻辑；每次更新控制 API 推 `message_update`，GUI 的聊天页按 `msg_id` 就地替换 |
+| 35 | 流式接口的 **50 QPS 频控与 50002** 未模拟；`is_wakeup` 只做类型校验，不改变窗口/配额；流式 markdown 里的 `qqbot-media://` 素材引用不做归属/时效校验与 90 天顺延 | 高频压测与召回分支测不出来；引用失效素材的流式消息在沙箱里会成功 | 见 `docs/UNIMPLEMENTED.md` §4；普通发送的素材校验不受影响 |
 
 ## 端口与域名假设
 
@@ -87,7 +89,7 @@ import mqs.compat.botpy   # 必须在创建 botpy.Client 之前 import
 ## 回归方式
 
 ```bash
-cargo test -p mqs                                   # 单元 + 集成（140 项）
+cargo test -p mqs                                   # 单元 + 集成（147 项）
 cargo run -q -p mqs -- serve                        # 或 ./target/debug/mqs serve
 MQS_BASE_URL=http://127.0.0.1:5700 python examples/botpy_echo/bot.py
 mqs script run smoke                                # 需要上面这个 echo bot 在线

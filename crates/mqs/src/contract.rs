@@ -7,7 +7,7 @@
 
 use serde_json::{json, Value};
 
-pub const DOC_DATE: &str = "2026-11-20";
+pub const DOC_DATE: &str = "2026-11-21";
 
 #[derive(Debug, Clone)]
 pub struct Endpoint {
@@ -137,6 +137,19 @@ pub static REGISTRY: &[Endpoint] = &[
         [10001, 40034, 40040, 40054, 40055, 40056, 40057, 40035006, 40035009, 40035010],
         "full",
         "2026-11-17 起 msg_id 也可传群消息 ID：私聊回复该消息发送者，窗口/次数按群规则算并与群内回复共用同一上限；沙箱无好友模型（Bot 见过的 openid 即视为可私聊）"
+    ),
+    ep!(
+        "c2c.stream_message",
+        "POST",
+        "/v2/users/{openid}/stream_messages",
+        "流式发送单聊消息（分片，支持 text / markdown）",
+        "bot",
+        "L0",
+        "message",
+        ["c2c_message"],
+        [10001, 40007, 40034, 40040, 40054, 40055, 40056, 40057],
+        "full",
+        "首片省略 stream_msg_id，响应 id 即后续分片要带的 id；append 追加、replace 必须以已下发前缀开头（不匹配 40007）；沙箱每次请求即时下发，同一 index + 相同内容重放按幂等处理；remain_msg_len 上限是设置项 stream_msg_max_len（默认 4000，官方未公布具体数值）；未模拟 50 QPS 频控与 is_wakeup"
     ),
     ep!(
         "group.delete_message",

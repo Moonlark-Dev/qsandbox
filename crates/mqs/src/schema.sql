@@ -1,4 +1,4 @@
--- QSandbox schema v2 (Rust rewrite, single baseline: guild/channel family removed)
+-- QSandbox schema v4 (Rust rewrite, single baseline: guild/channel family removed)
 -- Single-writer SQLite. Every change goes through the domain layer, never the API.
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -178,6 +178,27 @@ CREATE TABLE IF NOT EXISTS reply_keys (
     msg_seq    INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
     PRIMARY KEY (bot_id, msg_id, msg_seq)
+);
+
+-- 流式单聊消息：一条 stream 对应会话里的一条消息，`sent_content` 是已下发前缀。
+-- 沙箱即时下发（没有网络/打字机延迟），所以没有独立的 pending 列：
+-- 每次请求处理完，sent_content 就是当前全文，`input_mode=replace` 的前缀校验以它为准。
+CREATE TABLE IF NOT EXISTS stream_messages (
+    stream_msg_id      TEXT PRIMARY KEY,             -- 也是这条消息的 msg_id / 响应 id
+    bot_id             TEXT NOT NULL,
+    user_id            TEXT NOT NULL,                -- 目标用户（内部 id）
+    conversation_id    TEXT NOT NULL,
+    content_type       TEXT NOT NULL DEFAULT 'text', -- text | markdown
+    sent_content       TEXT NOT NULL DEFAULT '',     -- 已下发内容（replace 必须以此为前缀）
+    input_state        INTEGER NOT NULL DEFAULT 1,   -- 1 生成中 | 10 生成结束
+    last_index         INTEGER NOT NULL DEFAULT 0,
+    last_content_raw   TEXT NOT NULL DEFAULT '',     -- 上一分片的原始内容（用于重放判定）
+    last_input_mode    TEXT NOT NULL DEFAULT 'append',
+    last_input_state   INTEGER NOT NULL DEFAULT 1,
+    ref_idx            TEXT NOT NULL DEFAULT '',     -- 被动回复的 REFIDX_* 假值
+    finished_at        INTEGER NOT NULL DEFAULT 0,
+    created_at         INTEGER NOT NULL,
+    updated_at         INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS active_quota (

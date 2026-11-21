@@ -1,12 +1,12 @@
 # QSandbox 接口覆盖率
 
-> 自动生成 · 文档快照 2026-11-20 · 请勿手改
+> 自动生成 · 文档快照 2026-11-21 · 请勿手改
 
-**35 endpoints — 35 implemented, 0 stubs, 0 n/a**
+**36 endpoints — 36 implemented, 0 stubs, 0 n/a**
 
 | 层级 | 总数 | full | partial | stub | n/a |
 |---|---|---|---|---|---|
-| L0 | 6 | 6 | 0 | 0 | 0 |
+| L0 | 7 | 7 | 0 | 0 | 0 |
 | L1 | 17 | 15 | 2 | 0 | 0 |
 | L2 | 9 | 9 | 0 | 0 | 0 |
 | L3 | 3 | 2 | 1 | 0 | 0 |
@@ -21,6 +21,7 @@
 | `GET` | `/users/@me` | full | Bot Token | L0 | 获取机器人自身信息 |
 | `POST` | `/v2/groups/{group_openid}/messages` | full | Bot Token | L0 | 发送群聊消息（被动 / 主动） |
 | `POST` | `/v2/users/{openid}/messages` | full | Bot Token | L0 | 发送单聊消息（被动 / 主动） |
+| `POST` | `/v2/users/{openid}/stream_messages` | full | Bot Token | L0 | 流式发送单聊消息（分片，支持 text / markdown） |
 | `GET` | `/media/{hash}` | full | 无 | L1 | 沙箱媒体下载（内容哈希寻址） |
 | `POST` | `/v2/groups/{group_openid}/files` | full | Bot Token | L1 | 上传群聊富媒体文件 |
 | `DELETE` | `/v2/groups/{group_openid}/messages/{message_id}` | partial | Bot Token | L1 | 撤回群聊消息 |

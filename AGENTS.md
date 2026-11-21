@@ -59,7 +59,7 @@ docs/             COMPAT.md（已知差异）、COVERAGE.md（生成物）、UNI
 ```bash
 cargo fmt --all --check
 cargo clippy --all-targets -p mqs -- -D warnings
-cargo test -p mqs                       # 33 单元 + 107 集成
+cargo test -p mqs                       # 33 单元 + 114 集成
 cargo run -q -p mqs -- serve            # 起沙箱
 cargo run -q -p mqs -- status --json
 
@@ -120,7 +120,7 @@ cargo run -q -p mqs -- contract export
   或在 `Test::connect_gateway` 建立真实 WS 连接。
 - 时间相关（窗口/配额/token 过期）用控制 API 快进虚拟时钟，不要 `sleep` 真实时间。
 - 场景测试用 `spawn_echo_bot` 起一个最小 SUT；`scenarios/smoke.yaml` 是验收基线。
-- 新行为优先补集成测试，其次补单元测试；`cargo test -p mqs`（140 项）必须全绿。
+- 新行为优先补集成测试，其次补单元测试；`cargo test -p mqs`（147 项）必须全绿。
 
 ## 9. 前端
 

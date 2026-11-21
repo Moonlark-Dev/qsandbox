@@ -37,7 +37,7 @@ mqs serve --profile dev --host 127.0.0.1 --port 0 --control-port 0
 - **默认只绑 127.0.0.1**；`--host 0.0.0.0` 要求显式 `--token`，并在 stderr 打警告。
 - **信号**：SIGINT/SIGTERM → 两个 listener 优雅关闭 → 关网关连接 → 删 runtime.json → 释放锁。
 
-## 2. 数据模型（`crates/mqs/src/schema.sql`，schema v2）
+## 2. 数据模型（`crates/mqs/src/schema.sql`，schema v4）
 
 ```sql
 settings          -- key/value（JSON 编码）
@@ -61,6 +61,7 @@ media_image_uploads -- 素材上传任务：upload_id、预签名 sign、4 小�
 reply_windows     -- (msg_id,bot_id) → count, expires_at
 reply_keys        -- (bot_id,msg_id,msg_seq)  ★ 显式去重
 active_quota      -- (bot_id,conversation_id,day) → used
+stream_messages   -- 流式单聊消息：stream_msg_id(=msg_id)、sent_content、last_index/state
 frames            -- 调试器数据（双向 HTTP/WS，保留最近 2000 条）
 rules             -- 事件 → 条件 → 用户回复 + 延迟
 ```
@@ -109,8 +110,10 @@ rules             -- 事件 → 条件 → 用户回复 + 延迟
     `content` 前加 `<@!openid> `。
 - 群 payload：`{id, content, group_openid, group_id, author:{id, member_openid, union_openid, bot, member_role}, timestamp, msg_seq, mentions, attachments}`。
 - 单聊 payload：`{id, content, author:{id, user_openid, union_openid}, timestamp, …}`。
-- 被动回复：`msg_id` 必须属于该 Bot 在该会话收到的消息；群 5min/5 次、单聊 60min/4 次；
-  显式 `msg_seq` 重复 → 40054；未给时自动递增。
+- 被动回复：`msg_id` 必须属于该 Bot 在该会话收到的消息；群 60min/5 次（Bot 是群主/管理员时 50 次）、
+  单聊 60min/4 次；显式 `msg_seq` 重复 → 40054；未给时自动递增。
+- 流式单聊：`POST /v2/users/{openid}/stream_messages` 首片生成 `stream_msg_id` 并落一条消息，
+  续片按 `append`/`replace` 更新同一行；`replace` 不匹配已下发前缀 → 40007；续片不重复扣被动次数。
 - 引用：`message_reference.message_id` 必须存在（40034）。
 - 撤回：`DELETE` → 204；非本 Bot 消息 → 40034；只标记 `recalled_at`（`partial`）。
 - 未知字段：请求体整体存 `raw_json`，`message_out` 原样带回（`markdown`/`keyboard`/`ark`/`embed` 等）。

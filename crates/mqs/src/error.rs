@@ -31,6 +31,10 @@ pub fn catalog(code: i64) -> (u16, &'static str) {
         11244 => (401, "invalid app secret"),
         11253 => (403, "no interface access permission"),
         40034 => (404, "message not found or msg_id invalid"),
+        40007 => (
+            400,
+            "the delivered prefix of a stream message cannot change",
+        ),
         40040 => (403, "no permission to perform this action"),
         40054 => (400, "duplicate reply: msg_id + msg_seq already used"),
         40055 => (429, "active message quota exhausted"),
@@ -210,6 +214,12 @@ pub fn bot_offline(message: impl Into<String>) -> ApiError {
 
 pub fn passive_window_expired(message: impl Into<String>) -> ApiError {
     ApiError::new(40057, message)
+}
+
+/// `POST /v2/users/{openid}/stream_messages` 的官方错误码：`input_mode=replace`
+/// 时 `content_raw` 必须已下发前缀开头。
+pub fn stream_prefix_locked(message: impl Into<String>) -> ApiError {
+    ApiError::new(40007, message)
 }
 
 /// `GET /v2/users/{openid}/info` 的官方错误码：用户与机器人无好友关系。
