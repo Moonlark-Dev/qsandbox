@@ -202,13 +202,27 @@ async fn passive_reply_limit_and_expiry() {
     let body: Value = over.json().await.unwrap();
     assert_eq!(body["code"], 40057);
 
-    // a fresh message expires after the 5-minute window
+    // a fresh message is still replyable at 59 minutes, but expires after 60
     test.send_as_user("expire me", Some(vec!["10000"])).await;
     let message = last_inbound(&test, &format!("group:{group}")).await;
     test.ctl_ok(
         "POST",
         "/_mqs/clock/advance",
-        Some(json!({"duration": "6m"})),
+        Some(json!({"duration": "59m"})),
+    )
+    .await;
+    let still_open = client
+        .post(&url)
+        .header("authorization", format!("QQBot {token}"))
+        .json(&json!({"content": "just in time", "msg_id": message["msg_id"]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(still_open.status().as_u16(), 200);
+    test.ctl_ok(
+        "POST",
+        "/_mqs/clock/advance",
+        Some(json!({"duration": "2m"})),
     )
     .await;
     let expired = client
@@ -219,6 +233,178 @@ async fn passive_reply_limit_and_expiry() {
         .await
         .unwrap();
     let body: Value = expired.json().await.unwrap();
+    assert_eq!(body["code"], 40057);
+}
+
+#[tokio::test]
+async fn group_message_can_be_used_for_c2c_reply_and_shares_limit() {
+    let test = Test::start().await;
+    test.settings(json!({"require_online": false})).await;
+    let user = test.user_id().await;
+    let group = test.group_id().await;
+    test.send_as_user("私聊回复我", Some(vec!["10000"])).await;
+    let message = last_inbound(&test, &format!("group:{group}")).await;
+    let msg_id = message["msg_id"].as_str().unwrap();
+    let token = test.token("10000").await;
+    let client = test.http();
+    let group_url = format!(
+        "{}/v2/groups/{}/messages",
+        test.sim,
+        test.group_openid("10000", &group).await
+    );
+    let c2c_url = format!(
+        "{}/v2/users/{}/messages",
+        test.sim,
+        test.user_openid("10000", &user).await
+    );
+
+    // 2026-11-17: group msg_id + C2C endpoint = private reply to the sender.
+    // The 5-reply budget is shared with in-group replies for the same msg_id.
+    for seq in 1..=3 {
+        let response = client
+            .post(&group_url)
+            .header("authorization", format!("QQBot {token}"))
+            .json(&json!({"content": format!("group-{seq}"), "msg_id": msg_id}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200, "group reply {seq}");
+    }
+    // msg_seq dedupe is shared too: seq 1 was already used in the group.
+    let duplicate = client
+        .post(&c2c_url)
+        .header("authorization", format!("QQBot {token}"))
+        .json(&json!({"content": "dup", "msg_id": msg_id, "msg_seq": 1}))
+        .send()
+        .await
+        .unwrap();
+    let body: Value = duplicate.json().await.unwrap();
+    assert_eq!(body["code"], 40054);
+    for seq in 4..=5 {
+        let response = client
+            .post(&c2c_url)
+            .header("authorization", format!("QQBot {token}"))
+            .json(&json!({"content": format!("c2c-{seq}"), "msg_id": msg_id}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200, "c2c reply {seq}");
+    }
+    let over = client
+        .post(&c2c_url)
+        .header("authorization", format!("QQBot {token}"))
+        .json(&json!({"content": "sixth", "msg_id": msg_id}))
+        .send()
+        .await
+        .unwrap();
+    let body: Value = over.json().await.unwrap();
+    assert_eq!(body["code"], 40057);
+
+    // The private replies belong to the DM conversation, not the group.
+    let dm = test
+        .world()
+        .list_messages(&format!("dm:10000:{user}"), 20, None)
+        .unwrap();
+    assert_eq!(
+        dm.iter()
+            .filter(|item| item["direction"] == "out" && item["content"] == "c2c-4")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn c2c_reply_to_group_message_requires_the_sender() {
+    let test = Test::start().await;
+    test.settings(json!({"require_online": false})).await;
+    let user = test.user_id().await;
+    let group = test.group_id().await;
+    test.send_as_user("only me", Some(vec!["10000"])).await;
+    let message = last_inbound(&test, &format!("group:{group}")).await;
+    let members = test
+        .ctl_ok("GET", &format!("/_mqs/groups/{group}/members"), None)
+        .await;
+    let other = members
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|member| member["user_id"].as_str().unwrap())
+        .find(|id| *id != user)
+        .expect("another group member")
+        .to_string();
+    let token = test.token("10000").await;
+    let response = test
+        .http()
+        .post(format!(
+            "{}/v2/users/{}/messages",
+            test.sim,
+            test.user_openid("10000", &other).await
+        ))
+        .header("authorization", format!("QQBot {token}"))
+        .json(&json!({"content": "not mine", "msg_id": message["msg_id"]}))
+        .send()
+        .await
+        .unwrap();
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["code"], 40034);
+}
+
+#[tokio::test]
+async fn group_admin_bot_gets_fifty_passive_replies() {
+    let test = Test::start().await;
+    test.settings(json!({"require_online": false})).await;
+    let user = test.user_id().await;
+    let group = test.group_id().await;
+    let state = test
+        .ctl_ok(
+            "PATCH",
+            &format!("/_mqs/groups/{group}/bots/10000"),
+            Some(json!({"member_role": "admin"})),
+        )
+        .await;
+    assert_eq!(state["member_role"], "admin");
+    test.send_as_user("fifty replies", Some(vec!["10000"]))
+        .await;
+    let message = last_inbound(&test, &format!("group:{group}")).await;
+    let msg_id = message["msg_id"].as_str().unwrap();
+    let token = test.token("10000").await;
+    let client = test.http();
+    let group_url = format!(
+        "{}/v2/groups/{}/messages",
+        test.sim,
+        test.group_openid("10000", &group).await
+    );
+    let c2c_url = format!(
+        "{}/v2/users/{}/messages",
+        test.sim,
+        test.user_openid("10000", &user).await
+    );
+    for seq in 1..=49 {
+        let response = client
+            .post(&group_url)
+            .header("authorization", format!("QQBot {token}"))
+            .json(&json!({"content": format!("r{seq}"), "msg_id": msg_id}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200, "group reply {seq}");
+    }
+    let fiftieth = client
+        .post(&c2c_url)
+        .header("authorization", format!("QQBot {token}"))
+        .json(&json!({"content": "r50", "msg_id": msg_id}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(fiftieth.status().as_u16(), 200);
+    let over = client
+        .post(&c2c_url)
+        .header("authorization", format!("QQBot {token}"))
+        .json(&json!({"content": "r51", "msg_id": msg_id}))
+        .send()
+        .await
+        .unwrap();
+    let body: Value = over.json().await.unwrap();
     assert_eq!(body["code"], 40057);
 }
 

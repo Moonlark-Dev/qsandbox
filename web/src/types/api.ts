@@ -201,6 +201,7 @@ export interface BotPatch {
 export interface GroupBotPatch {
   allow_proactive_msg?: boolean | null;
   recv_msg_setting?: "all" | "only_mention" | "mention_and_context" | null;
+  member_role?: "member" | "owner" | "admin" | null;
 }
 
 export interface ChatSend {
@@ -239,6 +240,7 @@ export interface SettingsPatch {
   passive_reply_limit_c2c?: number | null;
   passive_window_group_ms?: number | null;
   passive_reply_limit_group?: number | null;
+  passive_reply_limit_group_admin?: number | null;
   theme?: string | null;
   telemetry?: boolean | null;
   autostart?: boolean | null;

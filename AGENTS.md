@@ -59,7 +59,7 @@ docs/             COMPAT.md（已知差异）、COVERAGE.md（生成物）、UNI
 ```bash
 cargo fmt --all --check
 cargo clippy --all-targets -p mqs -- -D warnings
-cargo test -p mqs                       # 33 单元 + 95 集成
+cargo test -p mqs                       # 33 单元 + 107 集成
 cargo run -q -p mqs -- serve            # 起沙箱
 cargo run -q -p mqs -- status --json
 
@@ -91,8 +91,9 @@ cargo run -q -p mqs -- contract export
   受**虚拟时钟**控制；错误码 11241/11242/11243/11244。
 - **内邀接口**：`feature.whitelist` 打开时非白名单 Bot → 11253；`feature.expose=public` 时整族 404。
 - **openid 按 Bot 隔离**：`openid_map(bot_id, kind, entity_id)`，同一 user 在两个 Bot 下 openid 不同。
-- **被动回复**：窗口 群 5min/5 次、单聊 60min/4 次；`msg_id` 必须属于该 Bot 在该会话收到的入站消息；
-  `msg_seq` 显式重复 → 40054；未给 `msg_seq` 时自动递增。
+- **被动回复**：窗口 群 60min/5 次（Bot 是群主/管理员时 50 次）、单聊 60min/4 次；
+  群消息的 `msg_id` 也能传到单聊接口私聊回复发送者，规则按群算并与群内回复共用同一 `msg_id` 的次数；
+  `msg_id` 必须属于该 Bot 收到的入站消息；`msg_seq` 显式重复 → 40054；未给 `msg_seq` 时自动递增。
 - **主动消息**：先过 Bot 级 / 群级开关（40040），再过滑动窗口限流（42900），再扣每日 1000 条配额（40055）；
   `require_online` 时未连网关 → 40056。
 - **事件**：`events.seq` 全局自增，网关 `s` 用它；`messages.seq` 是会话内序号；
@@ -119,7 +120,7 @@ cargo run -q -p mqs -- contract export
   或在 `Test::connect_gateway` 建立真实 WS 连接。
 - 时间相关（窗口/配额/token 过期）用控制 API 快进虚拟时钟，不要 `sleep` 真实时间。
 - 场景测试用 `spawn_echo_bot` 起一个最小 SUT；`scenarios/smoke.yaml` 是验收基线。
-- 新行为优先补集成测试，其次补单元测试；`cargo test -p mqs`（128 项）必须全绿。
+- 新行为优先补集成测试，其次补单元测试；`cargo test -p mqs`（140 项）必须全绿。
 
 ## 9. 前端
 

@@ -52,7 +52,7 @@ impl World {
             "joined_at": self.iso(i(&row, "joined_at")),
             "allow_proactive_msg": b(&row, "allow_proactive_msg"),
             "recv_msg_setting": if s(&row, "recv_msg_setting").is_empty() { "all".to_string() } else { s(&row, "recv_msg_setting") },
-            "member_role": "member",
+            "member_role": if s(&row, "member_role").is_empty() { "member".to_string() } else { s(&row, "member_role") },
         }))
     }
 
@@ -74,6 +74,12 @@ impl World {
                 ));
             }
             fields.push(("recv_msg_setting".into(), Value::String(value.to_string())));
+        }
+        if let Some(value) = patch.get("member_role").and_then(|v| v.as_str()) {
+            if !["member", "admin", "owner"].contains(&value) {
+                return Err(invalid_param("member_role must be member/admin/owner"));
+            }
+            fields.push(("member_role".into(), Value::String(value.to_string())));
         }
         if !fields.is_empty() {
             let cols: Vec<String> = fields.iter().map(|(key, _)| format!("{key}=?")).collect();

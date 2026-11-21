@@ -40,7 +40,7 @@
 | `POST` | `/v2/users/{openid}/upload_prepare` | full | Bot Token | L1 | 单聊富媒体分片上传：预上传 |
 | `POST` | `/v2/groups/{group_openid}/approval_join_request/{member_openid}` | full | Bot Token | L2 | 审批入群申请（approve/decline） |
 | `POST` | `/v2/groups/{group_openid}/batch_remove_members` | full | Bot Token | L2 | 群成员批量移除（可同时拉黑） |
-| `GET` | `/v2/groups/{group_openid}/bot_state` | full | Bot Token | L2 | 获取机器人群内状态（含主动消息开关） |
+| `GET` | `/v2/groups/{group_openid}/bot_state` | full | Bot Token | L2 | 获取机器人群内状态（含主动消息开关与群内角色） |
 | `GET` | `/v2/groups/{group_openid}/info` | full | Bot Token | L2 | 获取群基本信息 |
 | `GET` | `/v2/groups/{group_openid}/join_request_list` | full | Bot Token | L2 | 拉取入群申请列表 |
 | `GET` | `/v2/groups/{group_openid}/member_blacklist` | full | Bot Token | L2 | 查询群黑名单 |

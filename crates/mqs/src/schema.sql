@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS group_bots (
     joined_at           INTEGER NOT NULL,
     allow_proactive_msg INTEGER NOT NULL DEFAULT 1,
     recv_msg_setting    TEXT NOT NULL DEFAULT 'all',  -- all | only_mention | mention_and_context
+    member_role         TEXT NOT NULL DEFAULT 'member', -- member | admin | owner（机器人在群内的角色）
     PRIMARY KEY (group_id, bot_id)
 );
 

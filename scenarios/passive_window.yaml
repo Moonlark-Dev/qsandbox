@@ -1,5 +1,5 @@
 name: passive_window
-description: 被动回复 5 分钟窗口：快进 6 分钟后回复应返回 40057
+description: 自定义 5 分钟被动窗口（默认群窗口 60 分钟）：快进 6 分钟后回复应返回 40057
 setup:
   settings:
     rate_mode: "off"

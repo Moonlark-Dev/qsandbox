@@ -21,6 +21,21 @@ struct Delivery {
     event_type: String,
 }
 
+/// 被动回复规则来源：群消息（含「群消息私聊回复」）或单聊消息。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PassiveSource {
+    Group,
+    C2c,
+}
+
+struct PassiveReference {
+    key: String,
+    sent_at: i64,
+    source: PassiveSource,
+    /// 群消息来自哪个群：次数上限要看机器人在该群的角色（群主/管理员 50，否则 5）。
+    group_id: Option<String>,
+}
+
 impl World {
     // ------------------------------------------------------------------ user -> bot
     #[allow(clippy::too_many_arguments)]
@@ -515,27 +530,16 @@ impl World {
         // Official passive replies accept either msg_id (a message) or event_id
         // (INTERACTION_CREATE / GROUP_ADD_ROBOT / GROUP_MSG_RECEIVE / C2C_MSG_RECEIVE /
         // FRIEND_ADD). Both are "reply to something the bot already received".
-        let passive_key: Option<String>;
-        let passive_sent_at: i64;
-        if !msg_id_in.is_empty() {
-            let reference = self
-                .db
-                .one(
-                    "SELECT * FROM messages WHERE msg_id=? AND conversation_id=?",
-                    &p![msg_id_in, &conversation_id],
-                )?
-                .ok_or_else(|| {
-                    message_not_found(
-                        "msg_id does not refer to an inbound message of this conversation",
-                    )
-                })?;
-            if s(&reference, "direction") != "in" {
-                return Err(message_not_found(
-                    "msg_id does not refer to an inbound message of this conversation",
-                ));
-            }
-            passive_key = Some(msg_id_in.to_string());
-            passive_sent_at = i(&reference, "sent_at");
+        let passive: Option<PassiveReference> = if !msg_id_in.is_empty() {
+            // 2026-11-17: 群消息的 msg_id 也能用在单聊接口上，私聊回复该群消息的发送者；
+            // 窗口/次数仍按群消息规则算，并与群内回复共用同一个 msg_id 的计数。
+            Some(self.resolve_passive_message(
+                bot_id,
+                target_kind,
+                &entity_id,
+                msg_id_in,
+                &conversation_id,
+            )?)
         } else if !event_id_in.is_empty() {
             let event = self
                 .db
@@ -546,27 +550,25 @@ impl World {
                 .ok_or_else(|| {
                     message_not_found("event_id does not refer to an event delivered to this bot")
                 })?;
-            passive_key = Some(event_id_in.to_string());
-            passive_sent_at = i(&event, "created_at");
+            Some(PassiveReference {
+                key: event_id_in.to_string(),
+                sent_at: i(&event, "created_at"),
+                source: if target_kind == "group" {
+                    PassiveSource::Group
+                } else {
+                    PassiveSource::C2c
+                },
+                group_id: (target_kind == "group").then(|| entity_id.clone()),
+            })
         } else {
-            passive_key = None;
-            passive_sent_at = 0;
-        }
+            None
+        };
         let msg_seq: i64;
-        if let Some(passive_key) = &passive_key {
-            let passive_key = passive_key.as_str();
-            let (window, limit) = if target_kind == "user" {
-                (
-                    self.setting_i64("passive_window_c2c_ms"),
-                    self.setting_i64("passive_reply_limit_c2c"),
-                )
-            } else {
-                (
-                    self.setting_i64("passive_window_group_ms"),
-                    self.setting_i64("passive_reply_limit_group"),
-                )
-            };
-            if now - passive_sent_at > window {
+        if let Some(passive) = &passive {
+            let passive_key = passive.key.as_str();
+            let (window, limit) =
+                self.passive_reply_rule(bot_id, passive.source, passive.group_id.as_deref())?;
+            if now - passive.sent_at > window {
                 return Err(passive_window_expired(format!(
                     "passive reply window ({} minutes) has expired",
                     window / 60000
@@ -620,7 +622,7 @@ impl World {
             self.db.execute(
                 "INSERT INTO reply_windows(msg_id,bot_id,count,expires_at) VALUES(?,?,?,?) \
                  ON CONFLICT(msg_id,bot_id) DO UPDATE SET count=count+1, expires_at=excluded.expires_at",
-                &p![passive_key, bot_id, 1, passive_sent_at + window],
+                &p![passive_key, bot_id, 1, passive.sent_at + window],
             )?;
         } else {
             if !b(&bot, "allow_proactive_msg") {
@@ -789,6 +791,118 @@ impl World {
             result["_rate"] = info;
         }
         Ok(result)
+    }
+
+    /// Resolve the `msg_id` of a passive reply.
+    ///
+    /// 2026-11-17: a group message's `msg_id` can also be used on the C2C endpoint to
+    /// privately reply to its sender. The window and reply budget stay the group's,
+    /// and the counter is shared with in-group replies (same `msg_id`).
+    fn resolve_passive_message(
+        &self,
+        bot_id: &str,
+        target_kind: &str,
+        target_entity_id: &str,
+        msg_id: &str,
+        conversation_id: &str,
+    ) -> MqsResult<PassiveReference> {
+        if let Some(reference) = self.db.one(
+            "SELECT * FROM messages WHERE msg_id=? AND conversation_id=?",
+            &p![msg_id, conversation_id],
+        )? {
+            if s(&reference, "direction") != "in" {
+                return Err(message_not_found(
+                    "msg_id does not refer to an inbound message of this conversation",
+                ));
+            }
+            return Ok(PassiveReference {
+                key: msg_id.to_string(),
+                sent_at: i(&reference, "sent_at"),
+                source: if target_kind == "group" {
+                    PassiveSource::Group
+                } else {
+                    PassiveSource::C2c
+                },
+                group_id: (target_kind == "group").then(|| target_entity_id.to_string()),
+            });
+        }
+        if target_kind == "user" {
+            // The group message must be inbound, its sender must be the C2C target,
+            // and the bot must still be in that group.
+            if let Some(reference) = self.db.one(
+                "SELECT m.*, c.peer_id AS source_group_id FROM messages m \
+                 JOIN conversations c ON c.id=m.conversation_id \
+                 WHERE m.msg_id=? AND m.direction='in' AND c.type='group'",
+                &p![msg_id],
+            )? {
+                if s(&reference, "sender_id") != target_entity_id {
+                    return Err(message_not_found(
+                        "msg_id does not refer to a message sent by this user",
+                    ));
+                }
+                let group_id = s(&reference, "source_group_id");
+                if self
+                    .db
+                    .one(
+                        "SELECT 1 FROM group_bots WHERE group_id=? AND bot_id=?",
+                        &p![&group_id, bot_id],
+                    )?
+                    .is_none()
+                {
+                    return Err(message_not_found(
+                        "msg_id does not refer to a message of a group this bot is in",
+                    ));
+                }
+                return Ok(PassiveReference {
+                    key: msg_id.to_string(),
+                    sent_at: i(&reference, "sent_at"),
+                    source: PassiveSource::Group,
+                    group_id: Some(group_id),
+                });
+            }
+        }
+        Err(message_not_found(
+            "msg_id does not refer to an inbound message this bot received",
+        ))
+    }
+
+    /// Passive window and reply budget for the message being replied to.
+    ///
+    /// 2026-11-17: group messages get a 60-minute window; when the bot itself is the
+    /// group owner/admin in that group (the sandbox has no separate developer account,
+    /// so the bot's own `member_role` stands in for the developer being owner/admin),
+    /// each group message allows 50 passive replies instead of 5.
+    fn passive_reply_rule(
+        &self,
+        bot_id: &str,
+        source: PassiveSource,
+        group_id: Option<&str>,
+    ) -> MqsResult<(i64, i64)> {
+        match source {
+            PassiveSource::C2c => Ok((
+                self.setting_i64("passive_window_c2c_ms"),
+                self.setting_i64("passive_reply_limit_c2c"),
+            )),
+            PassiveSource::Group => {
+                let role = match group_id {
+                    Some(group_id) => self
+                        .db
+                        .one(
+                            "SELECT member_role FROM group_bots WHERE group_id=? AND bot_id=?",
+                            &p![group_id, bot_id],
+                        )?
+                        .map(|row| s(&row, "member_role"))
+                        .unwrap_or_default(),
+                    None => String::new(),
+                };
+                let limit = if role == "owner" || role == "admin" {
+                    self.setting_i64("passive_reply_limit_group_admin")
+                } else {
+                    self.setting_i64("passive_reply_limit_group")
+                };
+                Ok((self.setting_i64("passive_window_group_ms"), limit))
+            }
+        }
     }
 
     // ------------------------------------------------------------------ recall / interactions

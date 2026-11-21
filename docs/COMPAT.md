@@ -1,6 +1,6 @@
 # SDK 兼容性与已知差异
 
-> 文档快照：2026-11-20 · 对应 QSandbox v0.5（Rust + Tauri）
+> 文档快照：2026-11-21 · 对应 QSandbox v0.6（Rust + Tauri）
 
 ## 已实测
 
@@ -72,6 +72,10 @@ import mqs.compat.botpy   # 必须在创建 botpy.Client 之前 import
 | 27 | 发送 Markdown 时，沙箱只解析 `![…](…)` 图片目标里的 `qqbot-media://image/v1/<token>`（跳过 code span / fenced block）；正文裸写或普通链接里的该串不校验也不顺延有效期 | 引用校验与滑动过期按“图片语法”生效 | 校验结果：未知/他人 token → `40035010`（HTTP 403）；已删除/过期 → `40035009`（HTTP 400）；成功后在同一事务里顺延 `expires_at` |
 | 28 | 发送时按文件头（前 16 字节）嗅探图片格式并与 `prepare` 声明的 `content_type` 比对，不匹配 → `40035001`；`complete` 本身成功 | 内容不合法的图片会在发送这一步被拒，与官方「complete 可能成功、发送时格式检查失败」一致 | 只做文件头 sniff，不做完整解码；JPEG/PNG/GIF/WebP 的有效性以解码器为准，沙箱不模拟 |
 | 29 | 控制 API 的消息对象额外带 `media_images: [{token,url,image_id,file_name,preview_url,expires_at}]`，GUI 用它把 `qqbot-media://` 渲染成可加载的预览图 | 这是控制面扩展字段，不是 QQ 推送字段 | 与 `at_users` 同类处理：网关 payload/`raw` 保持原样 |
+| 30 | **群消息私聊回复已支持**（2026-11-17）：群消息的 `msg_id` 可传给 `POST /v2/users/{openid}/messages`，私聊回复该群消息的发送者。窗口/次数按群消息规则算，且与群内回复共用同一 `msg_id` 的计数（`reply_windows` 按 `msg_id+bot` 一行） | `msg_id` 不是该用户发的、或 Bot 已不在该群 → `40034`；超时/超次 → `40057`；重复 `msg_seq` → `40054`。官方对应码是 `40034024`/`40034005`/`40034128`/`40054005`，沙箱沿用近似码 | `msg_seq` 去重同样跨群内/私聊共用；私聊回复落在 DM 会话 |
+| 31 | **好友关系仍未建模**：官方要求群消息发送者与 Bot 是好友才可私聊回复（`40054004`/`40054006`） | 沙箱把「该 openid 曾由本 Bot 生成过（`openid_map` 有记录）」当作好友，不能复现「有 openid 但非好友」的拒绝分支；这与 `GET /v2/users/{openid}/info` 的口径一致 | 不引入好友表/`FRIEND_*` 家族，保持「只覆盖群聊 + 单聊 + 群管理 + 媒体」的产品边界 |
+| 32 | **`group_bots.member_role` 可配**（`member`/`admin`/`owner`），`GET .../bot_state` 返回真实值；群被动回复上限据此从 5 提到 50（设置项 `passive_reply_limit_group` / `passive_reply_limit_group_admin`），群内回复与群消息私聊回复都适用 | 沙箱没有「机器人开发者个人账号」，用**机器人在群内的角色**代表「开发者是群主/管理员」；这是该字段在当前产品边界内能做到的最接近建模 | 控制 API `PATCH /_mqs/groups/{group_id}/bots/{bot_id}` 的 `member_role`，GUI 群管理也有下拉框 |
+| 33 | 群被动回复窗口默认 **60 分钟**（`passive_window_group_ms`），仍受虚拟时钟控制；单聊保持 60 分钟 / 4 次 | 用 `POST /_mqs/clock/advance` 测窗口即可，不必等真实时间 | 2026-11-17 官方把群窗口从 5 分钟延长到 60 分钟 |
 
 ## 端口与域名假设
 
@@ -83,7 +87,7 @@ import mqs.compat.botpy   # 必须在创建 botpy.Client 之前 import
 ## 回归方式
 
 ```bash
-cargo test -p mqs                                   # 单元 + 集成（128 项）
+cargo test -p mqs                                   # 单元 + 集成（140 项）
 cargo run -q -p mqs -- serve                        # 或 ./target/debug/mqs serve
 MQS_BASE_URL=http://127.0.0.1:5700 python examples/botpy_echo/bot.py
 mqs script run smoke                                # 需要上面这个 echo bot 在线

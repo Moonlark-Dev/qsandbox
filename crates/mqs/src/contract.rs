@@ -136,7 +136,7 @@ pub static REGISTRY: &[Endpoint] = &[
         ["c2c_message"],
         [10001, 40034, 40040, 40054, 40055, 40056, 40057, 40035006, 40035009, 40035010],
         "full",
-        ""
+        "2026-11-17 起 msg_id 也可传群消息 ID：私聊回复该消息发送者，窗口/次数按群规则算并与群内回复共用同一上限；沙箱无好友模型（Bot 见过的 openid 即视为可私聊）"
     ),
     ep!(
         "group.delete_message",
@@ -363,7 +363,7 @@ pub static REGISTRY: &[Endpoint] = &[
         "group.bot_state",
         "GET",
         "/v2/groups/{group_openid}/bot_state",
-        "获取机器人群内状态（含主动消息开关）",
+        "获取机器人群内状态（含主动消息开关与群内角色）",
         "bot",
         "L2",
         "group",
@@ -823,6 +823,7 @@ export interface BotPatch {
 export interface GroupBotPatch {
   allow_proactive_msg?: boolean | null;
   recv_msg_setting?: "all" | "only_mention" | "mention_and_context" | null;
+  member_role?: "member" | "owner" | "admin" | null;
 }
 
 export interface ChatSend {
@@ -861,6 +862,7 @@ export interface SettingsPatch {
   passive_reply_limit_c2c?: number | null;
   passive_window_group_ms?: number | null;
   passive_reply_limit_group?: number | null;
+  passive_reply_limit_group_admin?: number | null;
   theme?: string | null;
   telemetry?: boolean | null;
   autostart?: boolean | null;

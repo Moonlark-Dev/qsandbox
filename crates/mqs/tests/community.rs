@@ -52,6 +52,35 @@ async fn group_info_and_bot_state() {
 }
 
 #[tokio::test]
+async fn group_bot_member_role_is_configurable() {
+    let test = Test::start().await;
+    whitelist(&test).await;
+    let group = test.group_id().await;
+    let bot_state = format!("/_mqs/groups/{group}/bot-state");
+    for role in ["owner", "admin", "member"] {
+        let state = test
+            .ctl_ok(
+                "PATCH",
+                &format!("/_mqs/groups/{group}/bots/10000"),
+                Some(json!({"member_role": role})),
+            )
+            .await;
+        assert_eq!(state["member_role"], role);
+        let state = test.ctl_ok("GET", &bot_state, None).await;
+        assert_eq!(state["member_role"], role);
+    }
+    let (status, body) = test
+        .ctl(
+            "PATCH",
+            &format!("/_mqs/groups/{group}/bots/10000"),
+            Some(json!({"member_role": "superadmin"})),
+        )
+        .await;
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["code"], 10001);
+}
+
+#[tokio::test]
 async fn group_mute_add_and_del() {
     let test = Test::start().await;
     whitelist(&test).await;

@@ -41,8 +41,9 @@
 
 - **入群自动审批策略（6 个接口，全缺）** — `GET|POST /v2/groups/join_approval_strategy`、`PATCH|DELETE /v2/groups/join_approval_strategy/{strategy_id}`、`POST /v2/groups/join_approval_strategy/{strategy_id}/execute`、`POST /v2/groups/join_approval_strategy/{strategy_id}/whitelist_users`。限额：一机器人最多 20 个策略、每策略最多 100 个群、默认一年过期、`is_enable=on/off`。影响：自动化拉群/验群类机器人无法在沙箱里跑完整闭环（申请事件 + 策略执行 + 白名单）。
 - **`global_rule` 只能读成 `none`** — `GET /v2/groups/{group_openid}/restrict_chat_setting` 的 `global_rule.mode` 在沙箱恒为 `none`（`community.rs:105` 硬编码），`schedule_rules`/`recurring_rules` 恒空。官方文档对 GET 定义了 `none|always|schedule` 三态与 `MuteScheduleRule`/`MuteRecurringRule`；但 POST 只接受 `members[]`，**文档未给出设置全员禁言的接口**，故这是"只读字段无法建模"，不是漏接口。
-- **`bot_state.member_role` 恒为 `member`** — 官方返回 `member|owner|admin`；沙箱从不返回 `admin`，因此"机器人需为群管理员才生效"的一类行为（自动审批策略、@全员每天 1 次）无法通过该字段验证。
+- **`bot_state.member_role` 已可配**（v0.6 起：控制 API `PATCH /_mqs/groups/{group_id}/bots/{bot_id}` 的 `member_role`，GUI 群管理也有下拉框），返回 `member|owner|admin`；群被动回复上限 5/50 也据此判断。仍缺的是**依赖该角色的其它行为**：入群自动审批策略、@全员每天 1 次。
 - **入群申请事件缺失** — `GROUP_JOIN_REQUEST`（intent `GROUP_MEMBER_EVENT (1<<24)`，见 §5），导致 `join_request_list` 只能轮询、事件驱动路径未覆盖。注意同属 `1<<24` 的 `GROUP_MEMBER_ADD`/`GROUP_MEMBER_REMOVE` 已经投递，缺的只是申请事件本身。
+- **群消息私聊回复已支持**（2026-11-17）：群消息 `msg_id` + 单聊接口，按群规则计时/计次并与群内回复共用上限。差的只是**好友关系校验**（沙箱没有好友模型，见 `docs/COMPAT.md` #31）。
 
 ## 4. 消息类未做
 
@@ -52,7 +53,7 @@
 - **流式消息（1 个接口）** — `POST /v2/users/{user_openid}/stream_messages`，`stream_msg_id`/`index`/`input_state(1|10)`/`input_mode(append|replace)`/`content_raw`，50 QPS；群聊明确"不支持流式参数"。影响：LLM 类机器人最常用的输出方式没有沙箱支持。
 - **`event_id` 被动回复的事件白名单** — 发消息接口的 `event_id` 与 `msg_id` 二选一。沙箱已支持按 `event_id` 走被动回复（不扣主动配额），但只要求事件属于该 Bot，未校验官方列出的白名单（群 `INTERACTION_CREATE`/`GROUP_ADD_ROBOT`/`GROUP_MSG_RECEIVE`，单聊 `INTERACTION_CREATE`/`C2C_MSG_RECEIVE`/`FRIEND_ADD`）；`GROUP_MSG_RECEIVE`/`C2C_MSG_RECEIVE` 事件本身也没有投递。影响：非法 event_id 组合在沙箱里比真机宽松。
 - **互动召回 `is_wakeup`** — 仅单聊，与 `msg_id`/`event_id` 互斥；用户主动对话后 30 天内 4 个周期各 1 条（当天/1-3/3-7/7-30 天）。影响：召回消息的配额与互斥校验完全没有。
-- **文本交互标签的真机校验** — `<qqbot-at-user id="" />`、`<qqbot-at-everyone />`、`<qqbot-cmd-enter text="" />`、`<qqbot-cmd-input text="" show="" reference="" />` 已按 `trans/text-chain.html` 解析：GUI 渲染 @ 标签与可点击指令，点击 `/回车指令` 以用户身份推送（群里自动 @ 发消息的 Bot），`/参数指令` 回填输入框并支持 `reference` 引用；控制 API 是 `POST /_mqs/messages/{id}/cmd`。仍缺：@全员 的「机器人需群管理员、每群每天 1 次」限制、`text`/`show` 的 100 字符上限、频道专属的 `<#channel_id>`/`<emoji:id>`，以及旧格式 `<@userid>`/`@everyone` 的解析（群 @ 消息的 `content` 仍用 `<@!openid>` 前缀拼接）。
+- **文本交互标签的真机校验** — `<qqbot-at-user id="" />`、`<qqbot-at-everyone />`、`<qqbot-cmd-enter text="" />`、`<qqbot-cmd-input text="" show="" reference="" />` 已按 `trans/text-chain.html` 解析：GUI 渲染 @ 标签与可点击指令，点击 `/回车指令` 以用户身份推送（群里自动 @ 发消息的 Bot），`/参数指令` 回填输入框并支持 `reference` 引用；控制 API 是 `POST /_mqs/messages/{id}/cmd`。仍缺：@全员 的「每群每天 1 次」计数（机器人是否群管理员的 `member_role` 已可配，但该限制本身未实现）、`text`/`show` 的 100 字符上限、频道专属的 `<#channel_id>`/`<emoji:id>`，以及旧格式 `<@userid>`/`@everyone` 的解析（群 @ 消息的 `content` 仍用 `<@!openid>` 前缀拼接）。
 - **按钮能力仍缺一部分** — 官方 `Button` 还有 `group_id`（同组按钮点击后互斥变灰）、`render_data.style` 3/4、`action.modal`（二次确认，`content`≤40 字、确认/取消文案≤4 字）、`action.anchor`（选图器）、`permission.type=0|1|2`（指定用户/管理员/所有人）、键盘上限 5 行×5 按钮（错误码 40034029）、`keyboard.id` 模版短形式。沙箱已按官方语义处理 `action.type`（0 链接 / 1 回调 / 2 指令）以及指令按钮的 `enter`（`true` 直接发送，默认 `false` 只把 `@bot + data` 填进输入框）和 `reply`（发送时引用按钮所在消息）；`anchor` 只回传字段，没有手机端选图器。影响：按钮权限、互斥与二次确认的回归测试仍缺。
 - **入站消息的扩展字段** — `message_type`（0 文本/3 结构化卡片/103 引用消息）、`message_scene.ext`（`msg_idx`/`ref_msg_idx`/`auth_token`）、`ark_data`（`ark_type` 8 种取值）、`msg_elements`、`attachments.width/height/voice_wav_url/asr_refer_text`（`autogen/event/group_message_create.html`）。沙箱 payload 无这些字段。影响：引用回复、卡片解析、语音 ASR 三类逻辑无法被测试覆盖。
 - **`message_reference.message_id` 的取值口径** — 官方为 `REFIDX_*`：非机器人消息取 `message_scene.ext` 的 `msg_idx`，机器人自己发的取响应 `ext_info.ref_idx`。沙箱用内部 `msg_id`，与真机不通用。

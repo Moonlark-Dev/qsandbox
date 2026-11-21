@@ -373,6 +373,24 @@ async function toggleGroupFullMessage() {
   }
 }
 
+async function setGroupBotRole(role: string) {
+  if (!activeGroup.value || !botState.value) return
+  const bot = groupBots.value[0]
+  if (!bot) return
+  try {
+    botState.value = await api.patch(`/_mqs/groups/${activeGroup.value.id}/bots/${bot.id}`, {
+      member_role: role,
+    })
+    toast(
+      role === 'member'
+        ? '机器人角色已设为成员：每条群消息最多 5 次被动回复'
+        : `机器人角色已设为${role === 'owner' ? '群主' : '管理员'}：每条群消息最多 50 次被动回复`,
+    )
+  } catch (error) {
+    toast(error instanceof Error ? error.message : String(error))
+  }
+}
+
 async function addBlacklist(userId: string) {
   if (!activeGroup.value || !userId) return
   try {
@@ -1007,6 +1025,18 @@ function isAudio(att: any): boolean {
             {{ botState?.recv_msg_setting === 'all' ? '全量消息：开' : '全量消息：关' }}
           </button>
           <button class="btn small" @click="simulateJoinRequest">模拟入群申请</button>
+        </div>
+        <div class="row wrap" style="margin-bottom: 8px">
+          <select
+            class="select small"
+            :value="botState?.member_role || 'member'"
+            title="机器人在本群的角色：群主/管理员时，每条群消息的被动回复上限为 50 次（群内回复与私聊回复共用）"
+            @change="setGroupBotRole(($event.target as HTMLSelectElement).value)"
+          >
+            <option value="member">机器人角色：成员（5 次）</option>
+            <option value="admin">机器人角色：管理员（50 次）</option>
+            <option value="owner">机器人角色：群主（50 次）</option>
+          </select>
         </div>
         <div v-if="joinRequests.length" class="small" style="margin-bottom: 8px">
           <div class="faint">入群申请 · {{ joinRequests.length }}</div>

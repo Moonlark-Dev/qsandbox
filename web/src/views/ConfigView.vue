@@ -422,7 +422,11 @@ const worldSettings = computed<any[]>(() => [
   { key: 'feature.whitelist', label: '模拟腾讯接口白名单（内邀接口）', type: 'switch' },
   { key: 'feature.expose', label: '沙箱暴露范围', type: 'select', options: [{ value: 'all', label: 'all（全部）' }, { value: 'public', label: 'public（仅公开）' }] },
   { key: 'active_quota_per_day', label: '主动消息配额（每天/会话）', type: 'number' },
-  { key: 'passive_window_ms', label: '被动回复窗口（毫秒）', type: 'number' },
+  { key: 'passive_window_group_ms', label: '群被动回复窗口（毫秒）', type: 'number' },
+  { key: 'passive_reply_limit_group', label: '群被动回复次数（成员）', type: 'number' },
+  { key: 'passive_reply_limit_group_admin', label: '群被动回复次数（群主/管理员）', type: 'number' },
+  { key: 'passive_window_c2c_ms', label: '单聊被动回复窗口（毫秒）', type: 'number' },
+  { key: 'passive_reply_limit_c2c', label: '单聊被动回复次数', type: 'number' },
 ])
 </script>
 

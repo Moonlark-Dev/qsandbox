@@ -106,6 +106,7 @@ pub struct BotPatch {
 pub struct GroupBotPatch {
     pub allow_proactive_msg: Option<bool>,
     pub recv_msg_setting: Option<String>,
+    pub member_role: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
